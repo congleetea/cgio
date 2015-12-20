@@ -1,0 +1,11 @@
+auto: true
+
+markdown: rdiscount
+pygments: true
+paginate: 8
+permalink: /:title
+
+title: congleetea.github.io
+url: http://congleetea.github.io
+feed: /atom.xml
+author_info: <a href="http://beiyuu.com/">BeiYuu</a>
