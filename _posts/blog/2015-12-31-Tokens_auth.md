@@ -1,12 +1,12 @@
 ---
 layout: post
-title: Token auth
+title: AAA  
 description: the principle of token
 category: blog
 ---
 
-
-|## (AAA) 认证(Authentication)，授权(Aauthorization),记账(Accounting)
+# AAA的概念
+    (AAA) 认证(Authentication)，授权(Aauthorization),记账(Accounting)
     认证是指验证用户的身份与可使用的网络服务；
     授权是指依据认证结果开放哪些网络服务给用户;
     记账是记录用户对各种网络服务的用量。
