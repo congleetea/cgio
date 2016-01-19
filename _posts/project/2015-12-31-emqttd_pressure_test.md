@@ -5,47 +5,324 @@ description: record the configuration and some method to check
 category: blog
 ---
 # 参数
-## 并发量配置
-1 设置最大进程数——vm.args.
-    +P 8192  最大进程数： 改成1000000（百万）
-    +Q 8192  系统同时存在的端口最大数： 这个首先要更改系统的内核参数，参考[linux kernel tuning](https://github.com/emqtt/emqttd/wiki/linux-kernel-tuning). 需要把可用的端口进行扩展，我是用的是把net.ipv4.ip_local_port_range="500 65535"，将可用端口改在500到65535之间。这样的话就可以连接六万五的并发了。所以这里可以把8192改成六万。 
+    参数的配置主要有emqttd的配置和系统的配置两部分。emqttd的配置主要是两个文件：etc/vm.args 和 etc/emqttd.config。系统配置主要是/etc/sysctl.config 和 etc/security/limit.config。 
+    
+## emqttd的配置：
+1 /etc/vm.args 的配置
+    这是对erlang的虚拟机的参数设置。[https://github.com/emqtt/emqttd/wiki/etc-vm.args-for-benchmark]
+`````````````````````````````````````````````````````
+## Name of the node
+-name emqttd@127.0.0.1
+## Cookie for distributed erlang
+-setcookie emqttdsecretcookie
 
-# 查看技巧
-参数
-=========================系统配置
+##-------------------------------------------------------------------------
+## Flags
+##-------------------------------------------------------------------------
+## Heartbeat management; auto-restarts VM if it dies or becomes unresponsive
+## (Disabled by default..use with caution!)
+##-heart
+-smp true
+## Enable kernel poll and a few async threads
++K true
+## 12 threads/core. our machine is 8 core
++A 96 
+## max process numbers
++P 2097152
+## Sets the maximum number of simultaneously existing ports for this system
++Q 1048576
 
+## max atom number
+## +t
+##-------------------------------------------------------------------------
+## Env
+##-------------------------------------------------------------------------
+## Increase number of concurrent ports/sockets
+-env ERL_MAX_PORTS 1048576
+-env ERTS_MAX_PORTS 1048576
+-env ERL_MAX_ETS_TABLES 1024
 
-etc/vm.args：
-----------------------------
-1）## max process numbers
-   +P 8192——> 1000000（一百万）,系统允许的最大进程数可以通过erlang:system_info(process_limit).来获取。
-2) ## Sets the maximum number of simultaneously existing ports for this system
-   +Q 8192——> 1000000   [60000(六万)/65536，可以通过erlang:system_info(port_limit).来获得.]这是不行的
-R17可以通过系统参数ERL_MAX_PORTS来获得，
------------------------------
+## Tweak GC to run more often
+-env ERL_FULLSWEEP_AFTER 1000
+`````````````````````````````````````````````````````
 
--------------------------------------
-3) mqtt 里面{max_clients, 8192}改成百万
--------------------------------------
+2 /etc/emqttd.config的配置
+    这是对emqttd的配置。[https://github.com/emqtt/emqttd/wiki/etc-emqttd.config-for-benchmark]
+````````````````````````````````````````````````````````````````````
+% -*- mode: erlang;erlang-indent-level: 4;indent-tabs-mode: nil -*-
+%% ex: ft=erlang ts=4 sw=4 et
+[{kernel,
+    [{start_timer, true},
+     {start_pg2, true}
+ ]},
+ {sasl, [
+    {sasl_error_logger, {file, "log/emqttd_sasl.log"}}
+ ]},
+ {ssl, [
+    %{versions, ['tlsv1.2', 'tlsv1.1']}
+ ]},
+ {lager, [
+    {colored, true},
+    {async_threshold, 5000},
+    {error_logger_redirect, false},
+    {crash_log, "log/emqttd_crash.log"},
+    {handlers, [
+        %%{lager_console_backend, info},
+        {lager_file_backend, [
+            {formatter_config, [time, " ", pid, " [",severity,"] ", message, "\n"]},
+            {file, "log/emqttd_error.log"},
+            {level, error},
+            {size, 104857600},
+            {date, "$D0"},
+            {count, 30}
+        ]}
+    ]}
+ ]},
+ {esockd, [
+    {logger, {lager, error}}
+ ]},
+ {emqttd, [
+    %% Authentication and Authorization
+    {access, [
+        %% Authetication. Anonymous Default
+        {auth, [
+            %% Authentication with username, password
+            %{username, []},
 
-改小pub的速度，有刚开始一直发改为3s发一次，负载下降很多。---------------------> 问题在于mongodb的操作太快。
+            %% Authentication with clientid
+            %{clientid, [{password, no}, {file, "etc/clients.config"}]},
 
-4） ## 12 threads/core.每个核12个进程，咱们的八核这里可以是96.
-    +A 16——>96
+            %% Authentication with LDAP
+            % {ldap, [
+            %    {servers, ["localhost"]},
+            %    {port, 389},
+            %    {timeout, 30},
+            %    {user_dn, "uid=$u,ou=People,dc=example,dc=com"},
+            %    {ssl, fasle},
+            %    {sslopts, [
+            %        {"certfile", "ssl.crt"},
+            %        {"keyfile", "ssl.key"}]}
+            % ]},
 
+            %% Allow all
+            {anonymous, []}
+        ]},
+        %% ACL config
+        {acl, [
+            %% Internal ACL module
+            {internal,  [{file, "etc/acl.config"}, {nomatch, allow}]}
+        ]}
+    ]},
+    %% MQTT Protocol Options
+    {mqtt, [
+        %% Packet
+        {packet, [
+            %% Max ClientId Length Allowed
+            {max_clientid_len, 1024},
+            %% Max Packet Size Allowed, 64K default
+            {max_packet_size,  65536}
+        ]},
+        %% Client
+        {client, [
+            %% Socket is connected, but no 'CONNECT' packet received
+            {idle_timeout, 20} %% seconds
+            %TODO: Network ingoing limit
+            %{ingoing_rate_limit, '64KB/s'}
+            %TODO: Reconnet control
+        ]},
+        %% Session
+        {session, [
+            %% Max number of QoS 1 and 2 messages that can be “in flight” at one time.
+            %% 0 means no limit
+            {max_inflight, 100},
 
-etc/emqttd.config
-listeners——>mqtt——>mqtt——>max_clients改为百万。
-                       ——>connopts/{rate_limit,"100, 20"},100表示爆发的速度100kb/s，20表示平均的10kb/s。
-mqtt——> client/{idle_timeout, 20},单位s，表示socket已经连接，但是没有CONNECT包接收到。
-    ——> session/{expired_after, 48},单位h，session的失效时间是2天。
-broker——>{sys_interval, 60},broker的$SYS信息更新时间。
+            %% Retry interval for redelivering QoS1/2 messages.
+            {unack_retry_interval, 60},
 
-mongodb_pool的大小加到1000
+            %% Awaiting PUBREL Timeout
+            {await_rel_timeout, 20},
 
-只有subscriber时，cpu消耗到0.2/3万3，而加入publish后，cpu负载会持续增加。
+            %% Max Packets that Awaiting PUBREL, 0 means no limit
+            {max_awaiting_rel, 0},
 
-******************************************************************************************************
+            %% Statistics Collection Interval(seconds)
+            {collect_interval, 0},
+
+            %% Expired after 2 days
+            {expired_after, 48}
+
+        ]},
+        %% Session
+        {queue, [
+            %% Max queue length. enqueued messages when persistent client disconnected,
+            %% or inflight window is full.
+            {max_length, 100},
+
+            %% Low-water mark of queued messages
+            {low_watermark, 0.2},
+
+            %% High-water mark of queued messages
+            {high_watermark, 0.6},
+
+            %% Queue Qos0 messages?
+            {queue_qos0, true}
+        ]}
+    ]},
+    %% Broker Options
+    {broker, [
+        %% System interval of publishing broker $SYS messages
+        {sys_interval, 60},
+
+        %% Retained messages
+        {retained, [
+            %% Expired after seconds, never expired if 0
+            {expired_after, 0},
+            %% Max number of retained messages
+            {max_message_num, 100000},
+            %% Max Payload Size of retained message
+            {max_playload_size, 65536}
+        ]},
+        %% PubSub
+        {pubsub, [
+            %% default should be scheduler numbers
+            {pool_size, 16} %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        ]},
+        %% Bridge
+        {bridge, [
+            %%TODO: bridge queue size
+            {max_queue_len, 10000},
+
+            %% Ping Interval of bridge node
+            {ping_down_interval, 1} %seconds
+        ]}
+    ]},
+    %% Modules
+    {modules, [
+        %% Client presence management module.
+        %% Publish messages when client connected or disconnected
+        {presence, [{qos, 0}]}
+
+        %% Subscribe topics automatically when client connected
+        %% {autosub, [{"$Q/client/$c", 0}]}
+
+        %% Rewrite rules
+        %% {rewrite, [{file, "etc/rewrite.config"}]}
+
+    ]},
+    %% Plugins
+    {plugins, [
+        %% Plugin App Library Dir
+        {plugins_dir, "./plugins"},
+
+        %% File to store loaded plugin names.
+        {loaded_file, "./data/loaded_plugins"}
+    ]},
+    %% Listeners
+    {listeners, [
+        {mqtt, 1883, [
+            %% Size of acceptor pool
+            {acceptors, 64}, #################################################################### 
+            %% Maximum number of concurrent clients
+            {max_clients, 1000000}, #########################################################
+            %% Socket Access Control
+            {access, [{allow, all}]},
+            %% Connection Options
+            {connopts, [
+                %% Rate Limit. Format is 'burst, rate', Unit is KB/Sec
+                {rate_limit, "100,50"} %% 100K burst, 10K rate
+            ]},
+            %% Socket Options
+            {sockopts, [
+                {backlog, 1024}
+                %Set buffer if hight thoughtput
+                %{recbuf, 4096},
+                %{sndbuf, 4096}
+                %{buffer, 4096},
+            ]}
+        ]},
+        {mqtts, 8883, [
+            %% Size of acceptor pool
+            {acceptors, 4},
+            %% Maximum number of concurrent clients
+            {max_clients, 512},
+            %% Socket Access Control
+            {access, [{allow, all}]},
+            %% SSL certificate and key files
+            {ssl, [{certfile, "etc/ssl/ssl.crt"},
+                   {keyfile,  "etc/ssl/ssl.key"}]},
+            %% Socket Options
+            {sockopts, [
+                {backlog, 1024}
+                %{buffer, 4096},
+            ]}
+        ]},
+        %% HTTP and WebSocket Listener
+        {http, 8083, [
+            %% Size of acceptor pool
+            {acceptors, 4},
+            %% Maximum number of concurrent clients
+            {max_clients, 64},
+            %% Socket Access Control
+            {access, [{allow, all}]},
+            %% Socket Options
+            {sockopts, [
+                {backlog, 1024}
+                %{buffer, 4096},
+            ]}
+        ]}
+    ]},
+
+    %% Erlang System Monitor
+    {sysmon, [
+
+        %% Long GC, don't monitor in production mode for:
+        %% https://github.com/erlang/otp/blob/feb45017da36be78d4c5784d758ede619fa7bfd3/erts/emulator/beam/erl_gc.c#L421
+        {long_gc, false}, #########################################
+
+        %% Long Schedule(ms)
+        {long_schedule, 50}, #####################################
+
+        %% 8M words. 32MB on 32-bit VM, 64MB on 64-bit VM.
+        %% 8 * 1024 * 1024
+        {large_heap, 8388608},#########################################
+
+        %% Busy Port
+        {busy_port, true}, #########################################
+
+        %% Busy Dist Port
+        {busy_dist_port, true} #########################################
+
+      ]}
+ ]}
+].
+````````````````````````````````````````````````````````````````````
+## 系统内核参数的配置
+    参考[https://github.com/emqtt/emqttd/wiki/linux-kernel-tuning](linux kernel tuning)
+    服务器端为了可以得到百万的并发量，需要配置两个文件：
+1 /etc/sysctl.conf
+``````````````````````````````````````````
+# max file descriptor
+fs.file-max = 1000000
+
+# Increase number of incoming connections
+net.core.somaxconn = 65536
+``````````````````````````````````````````
+    为了是服务器得到更好的优化，作者提供了集中配置方案，根据自己的情况选择即可。进行上面的配置之后，在终端执行sysctl -p 使之生效。
+2 /etc/security/limits.conf
+    添加两行：
+```````````````````````````````````````````
+*        soft   nofile      1000000
+*        hard   nofile      1000000
+```````````````````````````````````````````
+    完了使用ulimit -n来确认设置成功。
+    客户端要模拟百万的客户端连接，需要进行一些设置，一台机器的总的端口是65535个，去除系统占有的，我们可以设置500-65535之间可以作为客户端连接的端口。可以在终端执行下面命令：
+````````````````````````````````
+sysctl -w net.ipv4.ip_local_port_range="500 65535"
+echo 1000000 > /proc/sys/fs/nr_open
+````````````````````````````````
+也可以把相关的内容直接写到相应的文件中，端口范围写在/etc/sysctl.config中。
+## 错误记录：
+``````````````````````````````````````````````````
 =ERROR REPORT==== 7-Jan-2016::15:22:59 ===
 ** Generic server <0.618.0> terminating 
 ** Last message in was {inet_async,#Port<0.7400>,52627,{ok,#Port<0.426389>}}
@@ -91,17 +368,10 @@ File operation error: emfile. Target: /root/emqttd/rel/emqttd/lib/stdlib-2.6/ebi
 
 =ERROR REPORT==== 7-Jan-2016::15:22:59 ===
 File operation error: emfile. Target: lib.beam. Function: get_file. Process: code_server.
-=========================================================================
+``````````````````````````````````````````````````
 [https://github.com/emqtt/emqttd/issues/253]
-"emfile error" means that the broker cannot open new file descriptor.
-把vm中的参数，最后的：
-## Increase number of concurrent ports/sockets, deprecated in R17
--env ERL_MAX_PORTS 1000000
-
--env ERTS_MAX_PORTS 1000000
-
-同时使用 ulimit -n 1000000 打开的最大文件数
-==========================================================================
+"emfile error" means that the broker cannot open new file descriptor.拿就要检查你的文件个数的设置哪有没有设置为百万级的。
+`````````````````````````````````````````````````
 =ERROR REPORT==== 7-Jan-2016::19:29:57 ===
 File operation error: system_limit. Target: /root/emqttd/rel/emqttd/lib/os_mon-2.4/ebin/lager_logger.beam. Function: get_file. Process: code_server.
 =ERROR REPORT==== 7-Jan-2016::16:09:31 ===
@@ -116,7 +386,7 @@ File operation error: system_limit. Target: /root/emqttd/rel/emqttd/lib/os_mon-2
                                6525,0}
 ** Reason for termination == 
 ** {accept_error,system_limit}
-========================================================
+`````````````````````````````````````````````````
 这个参考比较老了，[http://blog.yufeng.info/archives/1851] and [http://blog.yufeng.info/archives/1380]
 上面修改ulimit -n 1000000 不能直接在shell中修改，应该在文件/etc/security/limits.conf 中修改
 # 确认包含下面的内容：
@@ -127,7 +397,6 @@ root hard nofile 1000000
 * hard    nproc           1000000
 * soft    nproc           1000000
 ，修改之后通过重现登录shell, 用ulimit -Hn和ulimit -Sn确认修改已生效
-========================================================
 
 
 [congleetea]:    http://congleetea.github.io  "congleetea"
