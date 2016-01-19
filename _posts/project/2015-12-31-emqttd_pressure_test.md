@@ -2,7 +2,7 @@
 layout: post
 title: emqttd pressure test
 description: record the configuration and some method to check
-category: blog
+category: project 
 ---
 # 参数
     参数的配置主要有emqttd的配置和系统的配置两部分。emqttd的配置主要是两个文件：etc/vm.args 和 etc/emqttd.config。系统配置主要是/etc/sysctl.config 和 etc/security/limit.config。 
