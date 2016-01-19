@@ -10,6 +10,7 @@ category: project
 ## emqttd的配置：
 1 /etc/vm.args 的配置
     这是对erlang的虚拟机的参数设置。[https://github.com/emqtt/emqttd/wiki/etc-vm.args-for-benchmark]
+
 `````````````````````````````````````````````````````
 ## Name of the node
 -name emqttd@127.0.0.1
@@ -44,11 +45,14 @@ category: project
 
 ## Tweak GC to run more often
 -env ERL_FULLSWEEP_AFTER 1000
+
 `````````````````````````````````````````````````````
 
 2 /etc/emqttd.config的配置
     这是对emqttd的配置。[https://github.com/emqtt/emqttd/wiki/etc-emqttd.config-for-benchmark]
+
 ````````````````````````````````````````````````````````````````````
+
 % -*- mode: erlang;erlang-indent-level: 4;indent-tabs-mode: nil -*-
 %% ex: ft=erlang ts=4 sw=4 et
 [{kernel,
@@ -88,7 +92,6 @@ category: project
         {auth, [
             %% Authentication with username, password
             %{username, []},
-
             %% Authentication with clientid
             %{clientid, [{password, no}, {file, "etc/clients.config"}]},
 
@@ -295,34 +298,45 @@ category: project
       ]}
  ]}
 ].
+
 ````````````````````````````````````````````````````````````````````
+
 ## 系统内核参数的配置
     参考[https://github.com/emqtt/emqttd/wiki/linux-kernel-tuning](linux kernel tuning)
     服务器端为了可以得到百万的并发量，需要配置两个文件：
 1 /etc/sysctl.conf
+
 ``````````````````````````````````````````
+
 # max file descriptor
 fs.file-max = 1000000
 
 # Increase number of incoming connections
 net.core.somaxconn = 65536
+
 ``````````````````````````````````````````
     为了是服务器得到更好的优化，作者提供了集中配置方案，根据自己的情况选择即可。进行上面的配置之后，在终端执行sysctl -p 使之生效。
 2 /etc/security/limits.conf
     添加两行：
 ```````````````````````````````````````````
+
 *        soft   nofile      1000000
 *        hard   nofile      1000000
+
 ```````````````````````````````````````````
     完了使用ulimit -n来确认设置成功。
     客户端要模拟百万的客户端连接，需要进行一些设置，一台机器的总的端口是65535个，去除系统占有的，我们可以设置500-65535之间可以作为客户端连接的端口。可以在终端执行下面命令：
+
 ````````````````````````````````
+
 sysctl -w net.ipv4.ip_local_port_range="500 65535"
 echo 1000000 > /proc/sys/fs/nr_open
+
 ````````````````````````````````
 也可以把相关的内容直接写到相应的文件中，端口范围写在/etc/sysctl.config中。
 ## 错误记录：
 ``````````````````````````````````````````````````
+
 =ERROR REPORT==== 7-Jan-2016::15:22:59 ===
 ** Generic server <0.618.0> terminating 
 ** Last message in was {inet_async,#Port<0.7400>,52627,{ok,#Port<0.426389>}}
@@ -344,7 +358,7 @@ echo 1000000 > /proc/sys/fs/nr_open
         {gen_server,try_dispatch,4,[{file,"gen_server.erl"},{line,615}]},
         {gen_server,handle_msg,5,[{file,"gen_server.erl"},{line,681}]},
         {proc_lib,init_p_do_apply,3,[{file,"proc_lib.erl"},{line,240}]}]}
-======================================================================================
+
 =ERROR REPORT==== 7-Jan-2016::15:22:59 ===
 File operation error: emfile. Target: /root/emqttd/rel/emqttd/lib/gen_logger-1.0/ebin/lager_logger.beam. Function: get_file. Process: code_server.
 
@@ -368,10 +382,13 @@ File operation error: emfile. Target: /root/emqttd/rel/emqttd/lib/stdlib-2.6/ebi
 
 =ERROR REPORT==== 7-Jan-2016::15:22:59 ===
 File operation error: emfile. Target: lib.beam. Function: get_file. Process: code_server.
+
 ``````````````````````````````````````````````````
 [https://github.com/emqtt/emqttd/issues/253]
 "emfile error" means that the broker cannot open new file descriptor.拿就要检查你的文件个数的设置哪有没有设置为百万级的。
+
 `````````````````````````````````````````````````
+
 =ERROR REPORT==== 7-Jan-2016::19:29:57 ===
 File operation error: system_limit. Target: /root/emqttd/rel/emqttd/lib/os_mon-2.4/ebin/lager_logger.beam. Function: get_file. Process: code_server.
 =ERROR REPORT==== 7-Jan-2016::16:09:31 ===
@@ -386,17 +403,23 @@ File operation error: system_limit. Target: /root/emqttd/rel/emqttd/lib/os_mon-2
                                6525,0}
 ** Reason for termination == 
 ** {accept_error,system_limit}
+
 `````````````````````````````````````````````````
+
 这个参考比较老了，[http://blog.yufeng.info/archives/1851] and [http://blog.yufeng.info/archives/1380]
-上面修改ulimit -n 1000000 不能直接在shell中修改，应该在文件/etc/security/limits.conf 中修改
-# 确认包含下面的内容：
+上面修改ulimit -n 1000000 不能直接在shell中修改，应该在文件/etc/security/limits.conf 中修改.
+    确认包含下面的内容：
+`````````````````````
 root soft nofile 1000000
 root hard nofile 1000000
 * soft nofile 1000000
 * hard nofile 1000000
 * hard    nproc           1000000
 * soft    nproc           1000000
-，修改之后通过重现登录shell, 用ulimit -Hn和ulimit -Sn确认修改已生效
+
+```````````````````````
+
+修改之后通过重现登录shell, 用ulimit -Hn和ulimit -Sn确认修改已生效
 
 
 [congleetea]:    http://congleetea.github.io  "congleetea"
