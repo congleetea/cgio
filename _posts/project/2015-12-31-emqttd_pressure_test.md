@@ -4,12 +4,12 @@ title: emqttd pressure test
 description: record the configuration and some method to check
 category: project 
 ---
-# 参数
+
     参数的配置主要有emqttd的配置和系统的配置两部分。emqttd的配置主要是两个文件：etc/vm.args 和 etc/emqttd.config。系统配置主要是/etc/sysctl.config 和 etc/security/limit.config。 
     
 ## emqttd的配置：
 1 /etc/vm.args 的配置
-    这是对erlang的虚拟机的参数设置。[https://github.com/emqtt/emqttd/wiki/etc-vm.args-for-benchmark]
+    这是对erlang的虚拟机的参数设置。[https://github.com/emqtt/emqttd/wiki/etc-vm.args-for-benchmark](vm.args)
 
 `````````````````````````````````````````````````````
 ## Name of the node
@@ -49,7 +49,7 @@ category: project
 `````````````````````````````````````````````````````
 
 2 /etc/emqttd.config的配置
-    这是对emqttd的配置。[https://github.com/emqtt/emqttd/wiki/etc-emqttd.config-for-benchmark]
+    这是对emqttd的配置。[https://github.com/emqtt/emqttd/wiki/etc-emqttd.config-for-benchmark](emqttd.config)
 
 ````````````````````````````````````````````````````````````````````
 % -*- mode: erlang;erlang-indent-level: 4;indent-tabs-mode: nil -*-
