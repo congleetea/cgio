@@ -8,7 +8,8 @@ category: project
     
 ## emqttd的配置：
 1 /etc/vm.args 的配置
-这是对erlang的虚拟机的参数设置。[https://github.com/emqtt/emqttd/wiki/etc-vm.args-for-benchmark](vm.args)
+
+是对erlang的虚拟机的参数设置。[https://github.com/emqtt/emqttd/wiki/etc-vm.args-for-benchmark](vm.args)
 
 `````````````````````````````````````````````````````
 ## Name of the node
@@ -48,8 +49,11 @@ category: project
 `````````````````````````````````````````````````````
 
 2 /etc/emqttd.config的配置
+
 这是对emqttd的配置。[https://github.com/emqtt/emqttd/wiki/etc-emqttd.config-for-benchmark](emqttd.config)
+
 ````````````````````````````````````````````````````````````````````
+
 % -*- mode: erlang;erlang-indent-level: 4;indent-tabs-mode: nil -*-
 %% ex: ft=erlang ts=4 sw=4 et
 [{kernel,
@@ -291,7 +295,6 @@ category: project
 
         %% Busy Dist Port
         {busy_dist_port, true} %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
       ]}
  ]}
 ].
@@ -306,20 +309,16 @@ category: project
 ``````````````````````````````````````````
 # max file descriptor
 fs.file-max = 1000000
-
 # Increase number of incoming connections
 net.core.somaxconn = 65536
-
 ``````````````````````````````````````````
 为了使服务器得到更好的优化，作者提供了集中配置方案，根据自己的情况选择即可。进行上面的配置之后，在终端执行sysctl -p 使之生效。
 
 2 /etc/security/limits.conf
 添加两行：
 ```````````````````````````````````````````
-
 *        soft   nofile      1000000
 *        hard   nofile      1000000
-
 ```````````````````````````````````````````
 完了使用ulimit -n来确认设置成功。
 客户端要模拟百万的客户端连接，需要进行一些设置，一台机器的总的端口是65535个，去除系统占有的，我们可以设置500-65535之间可以作为客户端连接的端口。可以在终端执行下面命令：
