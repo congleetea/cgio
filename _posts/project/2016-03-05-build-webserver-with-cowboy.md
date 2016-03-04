@@ -2,27 +2,38 @@
 layout: post
 title: 使用cowboy来搭建服务器 
 category: project 
-description: 
+description: 使用rebar构建基于cowboy的简单网络服务器
 ---
 
 ## 建立工程
 
 使用rebar来建立框架：
+
 $ mkdir webser
+
 $ cd webserver
+
 $ cp rebar to this dir
+
 $ ./rebar create-app appid=webserver
+
 ==> webserver (create-app)
 Writing src/webserver.app.src
 Writing src/webserver_app.erl
 Writing src/webserver_sup.erl
+
 $ ./rebar compile
+
 ==> webserver (compile)
 Compiled src/webserver_app.erl
 Compiled src/webserver_sup.erl
+
 $ mkdir rel
+
 $ cd rel
+
 $ ../rebar create-node nodeid=webserver 
+
 ==> rel (create-node)
 Writing reltool.config
 Writing files/erl
@@ -33,13 +44,18 @@ Writing files/vm.args
 Writing files/webserver.cmd
 Writing files/start_erl.cmd
 Writing files/install_upgrade.escript
+
 修改文件files/reltool.config:
        {lib_dirs, ["../..", "../deps"]}, %% 如果有deps才加上，没有就不加
+
 在根目录下面建立deps文件。
+
 $ ../rebar generate
+
 ==> rel (generate)
 到此工程就建立起来了，为了方便，我们使用makefile来做一些事：
 建立makefile文件：
+
 ```````````
 
 ERL=erl
