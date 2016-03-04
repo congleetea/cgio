@@ -16,23 +16,28 @@ $ cd webserver
 $ cp rebar to this dir
 
 $ ./rebar create-app appid=webserver
-
+``````````````````
 ==> webserver (create-app)
 Writing src/webserver.app.src
 Writing src/webserver_app.erl
 Writing src/webserver_sup.erl
 
-$ ./rebar compile
 
+``````````````````
+$ ./rebar compile
+``````````````````````
 ==> webserver (compile)
 Compiled src/webserver_app.erl
 Compiled src/webserver_sup.erl
 
+
+``````````````````````
 $ mkdir rel
 
 $ cd rel
 
 $ ../rebar create-node nodeid=webserver 
+```````````````````
 
 ==> rel (create-node)
 Writing reltool.config
@@ -44,6 +49,9 @@ Writing files/vm.args
 Writing files/webserver.cmd
 Writing files/start_erl.cmd
 Writing files/install_upgrade.escript
+
+
+```````````````````
 
 修改文件files/reltool.config:
        {lib_dirs, ["../..", "../deps"]}, %% 如果有deps才加上，没有就不加
