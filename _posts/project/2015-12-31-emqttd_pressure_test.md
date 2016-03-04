@@ -432,4 +432,17 @@ b) 如果erlang的任何一个进程分配的内存超过系统总内存的一�
 ``````````````````````````
 从上面这里我们可以得到很多信息, PROGRESS REPORT表示这个描述一个进程运行的描述, 这个进程的pid就是上面提示内存使用警报的那个,进程id是lager, 他的监督者是lager_sup,started是他在supervisor中的启动配置参数. 在mfargs中,我们可以知道这是在gen_event:start_link({local, lager_event})中启动的.根据这些提示,我们知道问题就在lager中, 在emqttd的配置文件中,我们发现lager的显示级别是error,而在emqttd_access_Control中只要deny的都会作为error,把这些信息全部写入到emqttd_error.log中去了,耗费了很大的内存.应该把这个关掉.
 
+
+
+
+
+
+## 数据库mongodb的影响
+1 压测脚本离散化： 
+    设备每三秒发送一个数据，启动客户端就不要是3的倍数时间内启动连接。 
+2000pub+1000sub 1610/3951 23%
+3000pub+1000sub 1743/3951 26% 
+4000pub+2000sub 2766/3951 50.9%
+
+
 [congleetea]:    http://congleetea.github.io  "congleetea"
