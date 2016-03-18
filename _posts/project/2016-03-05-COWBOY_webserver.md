@@ -217,3 +217,4 @@ terminate(_Reason, _Req, _State) ->
 
 ## 运行
 make all编译之后，在浏览器中输入： http://localhost:8080/ 就可以得到hello web的字样了，这就是简单的使用rebar和cowboy来做的一个web服务器。
+
