@@ -1,0 +1,160 @@
+#+TITLE: 2016-05-18-ERLND_rebar_release.org
+#+AUTHOR: Xuancong Lee
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Wednesday, May 18 2016
+#+OPTIONS: ^:nil
+
+使用rebar来进行erlang的app管理.
+官方的资料: https://github.com/rebar/rebar/wiki
+** rebar
+*** rebar and OTP conventions
+**** 目录结构:
+     | src     |
+     | ebin    |
+     | prib    |
+     | include |
+
+**** rebar惯例
+| Mode         | 说明                                                                                                                                           |
+|--------------+------------------------------------------------------------------------------------------------------------------------------------------------|
+| Tests        | rebar检查是否有test目录作为 [[http://erlang.org/doc/man/eunit.html][EUnit]] 的源文件路径.                                                                                                |
+|--------------+------------------------------------------------------------------------------------------------------------------------------------------------|
+| Port drivers | c_src 目录可用来包含用以构建 [[http://www.erlang.org/doc/reference_manual/ports.html][port drivers]] 的C代码源文件.                                                                                       |
+|--------------+------------------------------------------------------------------------------------------------------------------------------------------------|
+| release      | 包含reltool.config文件的目录, 根据这个配置文件来构建 Erlang app 的release,reltool.config这个文件是通过rebar的命令: rebar create-node 来产生的. |
+
+*** Rebar 命令
+[[https://github.com/rebar/rebar/wiki/Rebar-commands][rebar的常用命令]] 这里就不详述了, 需要的自行查看即可.这里列出几种常用的的源码格式, 通过编译命令 compile 之后的位置和文件:
+
+| Source        | Target          | Description                                    |
+|---------------+-----------------+------------------------------------------------|
+| src/*.erl     | ebin/*.beam     | Erlang source files                            |
+| src/*.app.src | ebin/*.app      | Erlang application specification               |
+| c_src/*.c     | priv/<app>.so   | C code for a port driver or NIF shared library |
+| mibs/*.mib    | priv/mibs/*.bin | SNMP mib files                                 |
+| src/*.xrl     | src/*.erl       | Leex analyzer generator files                  |
+
+*** 依赖项管理
+**** 依赖管理说明
+rebar 可以拉取和编译从外部获取的工程, 比如从git, hg等等.
+
+如果依赖的工程还依赖了其他的app, 那么rebar也会迭代的把他们拉取下来编译.
+
+**** 定义依赖项
+在rebar.config文件中定义依赖项, 格式如下:
+#+BEGIN_SRC
+   {deps, [Dependency1, Dependency2, ...]}.
+#+END_SRC
+每一个dependency通过一个三元组来定义:
+#+BEGIN_SRC
+    {App, VsnRegex, Source}
+#+END_SRC
+App表示这个依赖的app名字,
+VsnRegex是一个字符串, 用正则表示来匹配版本信息.
+Source指出用来拉取代码的引擎(git...)和Url路径, 主要是三部分{引擎,url,版本信息}
+
+有的时候使用四元组,最后加上[Raw], 这种情况用在我们下载的源码不符合otp的管理, 没有src/dependency_name.app.src也没有ebin/dependency_name.app文件的时候.
+
+*** template的支持
+rebar支持调用模板来创建特定的app,模块等等. 使用也很简单, 比如我们要创建一个gen_server的app, 名叫example,我们可以使用下面的命令很快就实现:
+#+BEGIN_SRC emacs-lisp
+    $ rebar create template=simplesrv srvid=example
+    ==> exampleapp (create)
+    Writing src/example.erl
+#+END_SRC
+    除了built-in 模板外, 你也可以自己建立模板, 然后将自己的模板放在~/.rebar/templates/目录下面(没有的话新建一个).
+rebar支持很多已有的模板, 具体参考[[rebar模板][https://github.com/rebar/rebar/wiki/Built-in-templates]]
+
+*** 动态配置
+    erlang 中的配置文件, 比如 rebar.config, reltool.config 和 *.app.src 以及 overlay vars files(在reltool.config中指定的),
+可以进行动态的配置.
+****
+    在这些需要动态配置的文件所在目录添加 xxx.config.script或者*.app.src.script, 这样rebar会根据这个script文件得出最终的配置项.
+当然, 这个script文件中两个变量是已经绑定的:
+
+CONFIG:
+这是 file:consult/1 函数从xxx.config或者xxx.app.src中读取出来的配置, 如果没有xxx.config 或者 xxx.app.src 文件, 结果就是[].
+
+SCRIPT:
+这是script的文件名字.
+
+**** 实例
+这里就以emqttd中的reltool.config.script文件来做解释:
+
+#+BEGIN_SRC
+%% -*- mode: erlang;erlang-indent-level: 4;indent-tabs-mode: nil -*-
+%% ex: ft=erlang ts=4 sw=4 et
+Sys         = proplists:get_value(sys, CONFIG),                             %% (1)
+IncludeApps = [App || {app, App, _} <- Sys],                                %% (2)
+
+[DepsDir]   = proplists:get_value(lib_dirs, Sys),                           %% (3)
+DepApps     = lists:map(fun(AppFile) ->                                     %% (4)
+                        {ok, [{application, Name, Attrs}]}
+                            = file:consult(filename:join(DepsDir, AppFile)),
+                        Name
+                      end, filelib:wildcard("*/ebin/*.app", DepsDir)),
+AppendApps  = DepApps -- IncludeApps,                                       %% (5)
+Cond        = [{mod_cond, app}, {incl_cond, include}],                      %% (6)
+
+NewSys      = lists:append(Sys, [{app, App, Cond} || App <- AppendApps]),   %% (7)
+
+lists:keyreplace(sys, 1, CONFIG, {sys, NewSys}).                            %% (8)
+#+END_SRC
+
+注解:
+#+BEGIN_VERSE
+(1) 中的CONFIG就是利用file:consult/1 从reltool.config 中读取出来的内容, 以tuple的形式存在
+    然后用proplists:get_value获得key为sys的值.
+(2) 提取处sys配置中的额app项
+(3) 获取sys配置中指定的deps目录, 里面放有所有的依赖app.
+(4) 对文件进行操作, 读取编译产生的*/ebin/*.app 中的内容, 提取出依赖的app的名字.
+    filelib:wildcard("*/ebin/*.app", DepsDir)): 从DepsDir目录中提取处满足匹配前面匹配关系的文件.
+    file:consult(filename:join(DepsDir, AppFile)) 读取处文件中的内容.
+(5) 在依赖的app中去掉reltool.config文件中在app级别进行配置的app, 这些配置的级别比sys级别配置的要高.
+(6) 定义一种release的包含模式.
+(7) 由于有的app在reltool.config文件中没有进行配置, 这里统一进行配置.并生成新的sys配置
+(8) 替换成新的配置, 给文件最终就返回了新的配置.
+#+ENG_VERSE
+
+** reltool
+   reltool是erlang提供的一个release管理工具. 我们依据 Erlang/OTP 开发的 application, 最后需要发布,这时需要使用
+reltool 帮我们生成最终的 release, 也称为 target system. 同时 reltool 可以分析 application 的依赖关系,帮助我们正
+确的发布应用.
+
+   reltool.config 是配置如何生成release包的文件?
+
+*** reltool 各种参数的说明:
+http://erlangdisplay.iteye.com/
+http://learnyousomeerlang.com/release-is-the-word#am-i-an-executable-yet
+
+release 过程需要将一些编译结果, 配置文件等移植到release包里面, 这个过程中就可以通过reltool工具来配置如何进行配置,
+那些文件需要复制, 变量应该怎么替换. 最终生成我们可以直接使用的release包.
+
+主要是release的三级配置, system, app, module 目录的优先级依次升高.
+
+*** 覆盖变量的解释:
+https://cartesianfaith.com/2011/09/08/overlay-variables-and-rebar/
+通常vars.config是用来作为overlay文件的, 是不是覆盖文件是在reltool.config文件中通过key: overlay_vars来指定的.
+这个文件提供一些变量来填充template, template可以用以任何模板化的文件.
+
+比如emqttd中, overlay_vars中的设置变量, 在file/emqttd, file/emqttd_top等等中用到, 在reltool.config中使用template时
+就会将vars.config中的变量值替换变量之后, 生成新的emqttd或者emqttd_top等文件.
+
+现在你就可以比较在reltool.config中overlay中使用到的copy和complate两者的区别了, copy用在该文件中没有使用到变量,直接
+复制到release目录中就可, template则是用在文件中使用到了vars.config中的变量,我们要将这个模板文件插入变量值之后生成新的
+文件.
+
+也就是说template是先复制这个文件,再从vars.config中取出值替换, 因此要注意什么时候使用copy,什么时候使用template.
+
+vars.config文件里的变量的书写形式:
+值主要是字符串和数字, 二进制是不行的.比如下面的方式是不对的:
+app.config
+{amqp_host, {{amqp_host_variable}}}
+vars.config:
+{amqp_host_variable, <<"127.0.0.1">>}.
+
+应该写成下面的形式:
+{amqp_host, <<"{{amqp_host_variable}}">>}
+{amqp_host_variable, "127.0.0.1"}.
+
+所有的你需要在release目录里面产生的文件都可以通过在reltool.config文件中利用template或者copy来产生.
