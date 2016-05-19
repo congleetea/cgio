@@ -6,7 +6,7 @@
 
 使用rebar来进行erlang的app管理.
 官方的资料: https://github.com/rebar/rebar/wiki
-** rebar
+
 *** rebar and OTP conventions
 **** 目录结构:
      | src     |
@@ -24,7 +24,8 @@
 | release      | 包含reltool.config文件的目录, 根据这个配置文件来构建 Erlang app 的release,reltool.config这个文件是通过rebar的命令: rebar create-node 来产生的. |
 
 *** Rebar 命令
-[[https://github.com/rebar/rebar/wiki/Rebar-commands][rebar的常用命令]] 这里就不详述了, 需要的自行查看即可.这里列出几种常用的的源码格式, 通过编译命令 compile 之后的位置和文件:
+[[https://github.com/rebar/rebar/wiki/Rebar-commands][rebar的常用命令]] 这里就不详述了, 需要的自行查看即可.
+**** 列出几种常用的的源码格式, 通过编译命令 compile 之后的位置和文件:
 
 | Source        | Target          | Description                                    |
 |---------------+-----------------+------------------------------------------------|
@@ -33,6 +34,9 @@
 | c_src/*.c     | priv/<app>.so   | C code for a port driver or NIF shared library |
 | mibs/*.mib    | priv/mibs/*.bin | SNMP mib files                                 |
 | src/*.xrl     | src/*.erl       | Leex analyzer generator files                  |
+
+**** rebar.config 中定义的命令选项
+参考:[[https://github.com/rebar/rebar/wiki/Rebar-commands][Rebar Options]]
 
 *** 依赖项管理
 **** 依赖管理说明
@@ -116,14 +120,14 @@ lists:keyreplace(sys, 1, CONFIG, {sys, NewSys}).                            %% (
 (8) 替换成新的配置, 给文件最终就返回了新的配置.
 #+ENG_VERSE
 
-** reltool
+*** reltool
    reltool是erlang提供的一个release管理工具. 我们依据 Erlang/OTP 开发的 application, 最后需要发布,这时需要使用
 reltool 帮我们生成最终的 release, 也称为 target system. 同时 reltool 可以分析 application 的依赖关系,帮助我们正
 确的发布应用.
 
    reltool.config 是配置如何生成release包的文件?
 
-*** reltool 各种参数的说明:
+**** reltool 各种参数的说明:
 http://erlangdisplay.iteye.com/
 http://learnyousomeerlang.com/release-is-the-word#am-i-an-executable-yet
 
@@ -132,7 +136,7 @@ release 过程需要将一些编译结果, 配置文件等移植到release包里
 
 主要是release的三级配置, system, app, module 目录的优先级依次升高.
 
-*** 覆盖变量的解释:
+**** 覆盖变量的解释:
 https://cartesianfaith.com/2011/09/08/overlay-variables-and-rebar/
 通常vars.config是用来作为overlay文件的, 是不是覆盖文件是在reltool.config文件中通过key: overlay_vars来指定的.
 这个文件提供一些变量来填充template, template可以用以任何模板化的文件.
