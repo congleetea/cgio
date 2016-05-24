@@ -1,0 +1,76 @@
+#+TITLE: 2016-05-21-ERLNG_recursion.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Saturday, May 21 2016 
+#+OPTIONS: ^:nil
+
+** 概述
+对于函数式编程, 大部分没有向面向对象的语言拥有的for, while等循环的函数. 而具有相同功能的是
+递归.
+
+** 递归函数
+我们先看一个简单的递归的例子:
+不如我们要计算阶乘:
+#+BEGIN_SRC
+fac(0) ->
+    1;
+fac(N) when N > 0 ->
+    N * fac(N-1).
+#+END_SRC
+上面的后一部分函数不断调用自身函数, 只是参数在不断减小, 当参数减到0的时候最终结束计算.
+
+我们发现递归的实现:
+首先设置好结束的情况, 避免进入死循环.
+然后是有一个在函数内部调用自身的函数.
+
+存在的问题:
+
+虽然这种方式解决起来很方便, 但是如果参数不是一个数字,而是一个非常大维度的list, 比如下面
+计算list的长度的例子:
+#+BEGIN_SRC
+len([]) ->
+    0;
+len([_|T]) ->
+    1+len(T).     
+#+END_SRC
+
+如果这里的参数是一个长度很大的list, 那么将会耗费很大的内存长度不断减小的list, 因此这种
+方式不是一种好的方式. 于是就引出来尾递归(tail recursion)的概念了.
+
+** 尾递归
+尾递归为了解决上面的递归占用大量内存的情况, 引入一个临时的变量来保存每一步计算得到的结果,
+这样, 一个上面的函数中就只需要内存保留不超过2个的参数了. 大大的节省了内存. 我们把这个临时
+的参数叫做 /accumulator/,即 *累加器*.
+
+看上面的阶乘计算在使用尾递归时的用法:
+#+BEGIN_SRC
+tail_fac(N) -> tail_fac(N,1).
+ 
+tail_fac(0,Acc) -> Acc;
+tail_fac(N,Acc) when N > 0 -> tail_fac(N-1,N*Acc).   
+#+END_SRC
+
+可以总结尾递归的三个特点:
+1 通常我们给的参数只是计算需要的参数, 因此首先要添加一个累加器, 符合尾递归函数的标准;
+2 定义结束的条件, 比如阶乘计算的停止条件就是参数为0的时候停止;
+3 定义一个包含调用自身的函数.
+
+这就是尾递归的内容, 下面我们再看几个尾递归的例子:
+
+计算list的长度:
+#+BEGIN_SRC
+tail_len(L) -> tail_len(L,0).
+ 
+tail_len([], Acc) -> Acc;
+tail_len([_|T], Acc) -> tail_len(T,Acc+1).
+#+END_SRC
+
+复制N个某个term组成的list:
+#+BEGIN_SRC
+tail_dup(N, Term) ->
+    tail_dup(N, Term, []).
+tail_dup(0, _, List) ->
+    List;
+tail_dup(N, Term , List) ->
+    tail_dup(N-1, Term, [Term|List]).
+#+END_SRC
