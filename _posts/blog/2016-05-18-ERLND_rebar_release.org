@@ -38,6 +38,27 @@
 **** rebar.config 中定义的命令选项
 参考:[[https://github.com/rebar/rebar/wiki/Rebar-commands][Rebar Options]]
 
+| args            | Command              | 说明                               |
+|-----------------+----------------------+------------------------------------|
+| erl_opts        | compile              | compile模块支持的选项,参考[[http://www.erlang.org/doc/man/compile.html][here]]     |
+| erl_first_files | compile              | 应该在其他模块之前进行编译的模块   |
+| clean_files     | clean                | clean命令删除的文件列表            |
+| deps_dir        | get-deps,delete-deps | 指定可选的目录保存下载的依赖app    |
+| deps            | get-deps,delete-deps | 依赖项列表                         |
+| target_dir      | generate             | 目标文件目录                       |
+| overlay_vars    | generate             | overlay 变量文件                   |
+| recursive_cmds  |                      | 需要迭代执行的命令,比如clean,eunit |
+
+
+这里对erl_opts的一些参数进行说明:
+| 参数               | 说明                                                                                                |
+|--------------------+-----------------------------------------------------------------------------------------------------|
+| debug_info         | 以某个code的形式包含调试信息({parse_transform,Module})(lager要求{parse_transform, lager_transform}) |
+| warn_export_all    | 如果代码中给出export_all选项,提示警告信息                                                           |
+| warn_unused_import | 如果import了函数, 但是没有使用到,那就提示警告信息                                                   |
+| src_dirs           | {src_dirs, ["SrcDirs"]} 包含erlang源文件的路径.                                                     |
+| i                  | {i, "IncludeDir"}包含include路径                                                                    |
+
 *** 依赖项管理
 **** 依赖管理说明
 rebar 可以拉取和编译从外部获取的工程, 比如从git, hg等等.

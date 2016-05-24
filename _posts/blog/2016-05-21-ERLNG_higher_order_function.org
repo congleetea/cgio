@@ -1,0 +1,70 @@
+#+TITLE: 2016-05-21-ERLNG_higher_order_function.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Saturday, May 21 2016 
+#+OPTIONS: ^:nil
+
+** 函数的引用(高阶函数)
+函数由原子来定义, 但是在传递函数的时候不能使用函数名(也就是原子), 因为
+函数不会把这个原子识别为函数. 比如下面的例子:
+#+BEGIN_SRC
+-module(hhfuns).
+-compile(export_all).
+ 
+one() -> 1.
+two() -> 2.
+ 
+add(X,Y) -> X() + Y().
+#+END_SRC
+
+在使用的时候:
+#+BEGIN_SRC
+1> c(hhfuns).
+{ok, hhfuns}
+2> hhfuns:add(one,two).
+/** exception error: bad function one/
+in function  hhfuns:add/2
+3> hhfuns:add(1,2).
+/** exception error: bad function 1/
+in function  hhfuns:add/2
+4> hhfuns:add(fun hhfuns:one/0, fun hhfuns:two/0).
+3
+#+END_SRC
+
+第二个命令的使用是错的, add函数不会把one和two识别为函数, 同理也不会把整数解析为函数,
+而应该使用命令4, 使用匿名函数(lamda函数): *fun Module:Function/Arity*, 告诉vm要使用那个
+特定的函数.
+
+** 匿名函数(Anonymous functions)
+
+定义:
+#+BEGIN_SRC
+fun(Args1) ->
+    Expression1, Exp2, ..., ExpN;
+   (Args2) ->
+    Expression1, Exp2, ..., ExpN;
+   (Args3) ->
+    Expression1, Exp2, ..., ExpN
+end
+#+END_SRC
+
+匿名函数的使用:
+#+BEGIN_SRC
+19> PrepareAlarm = fun(Room) ->                      %% 定义匿名函数
+19>    io:format("Alarm set in ~s.~n",[Room]),
+19>     fun Loop() ->
+19>        io:format("Alarm tripped in ~s! Call Batman!~n",[Room]),
+19>        timer:sleep(500),
+19>         Loop()
+19>     end
+19> end.
+#Fun<erl_eval.6.71889879>
+20> AlarmReady = PrepareAlarm("bathroom").            %% 使用匿名函数
+Alarm set in bathroom.
+#Fun<erl_eval.44.71889879>
+21> AlarmReady().
+Alarm tripped in bathroom! Call Batman!
+Alarm tripped in bathroom! Call Batman!
+Alarm tripped in bathroom! Call Batman!
+...
+#+END_SRC
