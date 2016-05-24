@@ -1,0 +1,55 @@
+#+TITLE: 2016-05-21-ERLNG_errors_and_exceptions.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Saturday, May 21 2016 
+#+OPTIONS: ^:nil
+
+** erlang 的两种范式
+函数式(functional)和并行式(concurrent)
+前者是进入后者的基础, 本文首先讲解前者的errors and exceptions.
+*** Functional
+    包括referential transparent(引用透明性)[fn:1], 递归, 高阶函数等等.
+
+*** Concurrent
+    这是让erlang成名的主要特性, 包括actors, 成千上万的并行进程, 监督树等等...
+
+
+** errors
+errors 分为很多类:编译时错误，逻辑错误，运行时错误和生成错误．
+
+*** Compilation of Errors
+| Error                                                                                                |
+|------------------------------------------------------------------------------------------------------|
+| module.beam: Module name 'madule' does not match file name 'module'                                  |
+| ./module.erl:2: Warning: function some_function/0 is unused                                          |
+| ./module.erl:2: function some_function/1 undefined                                                   |
+| ./module.erl:5: syntax error before: 'SomeCharacterOrWord'                                           |
+| ./module.erl:5: syntax error before:                                                                 |
+| ./module.erl:5: Warning: this expression will fail with a 'badarith' exceptions                      |
+| ./module.erl:5: Warning: variable 'Var' is unused                                                    |
+| ./module.erl:5: Warning: a term is constructed, but never used                                       |
+| ./module.erl:5: head mismatch                                                                        |
+| ./module.erl:5: Warning: this clause cannot match because a previous clause at line 4 always matches |
+| ./module.erl:9: variable 'A' unsafe in 'case' (line 5)                                               |
+重点解释一个编译时错误：
+
+head mismatch: 这个错误通常出现在你定义了同名的函数,但是元数不同的时候,前一个函数的结尾要用'.'来结尾,而
+元数相同的则要使用;号来结尾.
+
+*** Logic Error
+逻辑错误大部分来自程序员, 这是最难处理的一类错误. 比如条件性的声明,if case等没有考虑所有的类型,乘除法混合等等.
+
+erlang中有很多工具帮助你, 包括测试框架, TpyEr和Dialyzer, [[http://erlang.org/doc/apps/debugger/debugger_chapter.html][Debbuger]], [[http://erldocs.com/18.0/runtime_tools/dbg.html][tracing module]] 等等. 
+
+*** Raising Exceptions
+
+
+
+
+
+
+[fn:1] 引用透明的概念与函数的副作用相关, 且受其影响.如果程序中任意两处具有相同输入
+值的函数调用能够互相置换，而不影响程序的动作，那么该程序就具有引用透明性。它的优点
+是比非引用透明的语言的语义更容易理解，不那么晦涩。纯函数式语言没有变量，所以它们都
+具有引用透明性。 通俗的理解就是定义的函数内部没有用到函数外的变量. erlang 在函数没
+有全局变量之类的说法, 因此是引用透明的.

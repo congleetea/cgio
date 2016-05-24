@@ -1,0 +1,300 @@
+#+TITLE: 2016-05-23-RBTMQ_rabbitmq.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Monday, May 23 2016 
+#+OPTIONS: ^:nil
+
+** Celery
+*** 四个基础
+    选择一个broker，即一个发送和接受消息的解决方案 eg: sudo apt-get install rabbitmq-server
+    创建一个task，即我们想让它做的事情，要能被worker调用,其实worker就是执行task任务的进程。
+    运行worker(他会调用进程去执行相应队列的任务)
+    追踪task在不同状态间的迁移，并检视返回值。
+
+*** 使用celery我们需要做的是
+    1 按照自己的需要配置celery
+    2 import相应的模块写producer产生任务消息到队列
+    3 import相应的模块写task。
+    
+    所以，至于celery内部实现我们可以暂时不要太细究，或者说在运用的时候我们可以通过内部实现理解他，使用的时候会用就行。
+    
+*** 配置
+    Celery像一个消费者，他有一个输入和输出，连接输入到一个broker，可能输出一个结果给后端。
+    单个配置：
+    #+BEGIN_SRC
+    app.conf.task_serializer = 'json'
+    #+END_SRC
+    多项配置（使用update）：
+    #+BEGIN_SRC
+    app.conf.update(
+                    task_serializer='json',
+                    accept_content=['json'],
+                    result_serializer='json',
+                    timezone='Europe/Oslo',
+                    enable_uts=True,
+    )
+    #+END_SRC
+    使用配置模块：app.config_from_object('celeryconfig') 这里的celeryconfig是一个配置模块，即celeryconfig.py:
+    #+BEGIN_SRC
+        broker_url = 'amqp://'
+        result_backend = 'rpc://'
+        task_serializer = 'json'
+        result_serializer = 'json'
+        accept_content = ['json']
+        timezone = 'Europe/Oslo'
+        enable_utc = True
+    #+END_SRC
+    使用前为了确认配置文件没有问题，可以通过python -m celeryconfig看有没有书写问题。
+        
+*** 在工程中使用celery
+    #+BEGIN_SRC
+     proj/__init__.py
+        /celery.py    :这里实例化一个Celery，并作一些配置，通知指明工程，task就在这里找到 
+        /taskA.py     :将要做的事放在这里，也可以分成多个文件，在写一个py文件来统筹它。
+        /taskB.py     :同一个文件里面也可以又多个task操作，比如这里里面可以有add, mul, xsum等任务
+    #+END_SRC    
+**** 启动worker：celery -A proj worker -l info
+**** 停止worker：Ctrl+c
+**** 后台运行：
+     #+BEGIN_SRC
+      启动 celery mul start w1 -A proj -l info
+               停止 celery mul stop w1 -A proj -l info (异步停止，不等worker关闭)
+                    celery mul stopwait w1 -A proj -l info (等待当前任务完成，worker关闭)
+               重启 celery mul restart w1 -A proj -l info
+     #+END_SRC    
+**** 调用任务： 
+| delay()       | 发送一个任务消息，这一步会根据配置的路由决定把任务推到那个队列, 所以这一步并没有立刻就执行，理解celery的异步特性，记住，这里只是把任务推到队列，由这个队列对应的启动的worker来执行，如果worker不够了，就会等待。这是下面的apply_async的快捷方式，只是这里不支持执行选项。 |
+| apply_async() |                                                                                                                                                                                                                                                                           |
+
+
+*** Application
+**** Main Name
+**** Configuration
+        按顺序查询配置：实时修改的---配置模块----默认配置
+        使用configuration：  app.config_from_object() 
+                             config_from_envvar:从一个环境变量来获取
+        Censored configuration 
+**** Laziness：使用的时候或者application敲定之后，装饰器才创建task.
+        敲定application实例将会：
+        copy task -- 评估所有task 装饰器 --- 确保所有的tasks都绑定当前的app
+**** Abstract Tasks：所有使用task()创建的task都会集成application的基类Task ,可以在装饰器中制定其他的基类 ：@app.task(base=OtherTask):
+
+*** Tasks 
+    是Celery运用的构件块。
+    一个task是一个类，可以调用进行创建。
+    一个任务消息不会消失，除非worker执行之后返回了ack。保证消息不丢失。这是rabbitmq中设置的。
+    幂等的(idempotent):task 函数在不同时间，参数相同的情况下，获得结果应该时一样的。
+**** Basics：创建通过@app.task 可以在task中加入一些参数。
+**** Names：每个任务必须有一个独一的名字
+        Automatic naming and relative imports
+**** logging：
+        from celery.utils.log import get_task_logger
+**** Retrying：重新执行task：retry()
+**** States：Result Backend，持久化.
+**** Handlers
+**** How it works
+        登记处包含一个列表，里面有所有task names和task class ，tasks只有当import之后才会注册。
+        任务消息来了之后，会到登记处找任务名，然后根据任务名找相应的code。
+**** Tips and Best Practices
+        Ignore results you don’t want : @app.task(ignore_result=True) 或者 CELERY_IGNORE_RESULT （全局设置）
+        Disable rate limits if they’re not used: CELERY_DISABLE_RATE_LIMITS = True 
+        Avoid launching synchronous subtasks: 不要让一个任务等待另一个任务的结果（即同步），要设置成异步的。可以使用任务链task chain
+**** Performance and Strategies
+        Granularity（计算量）：通常把一个运行较长的任务分成几个任务。这样可以并行的执行更多的任务，防止长任务阻塞worker。
+**** Data locality
+        worker处理任务应该尽可能的接近数据，最好是在内存有一个复制。最不要的就是数据完全从另一个地方传递过来。
+        如果数据太远，可以试着运行另外一个worker，或者使用cache,最简单的办法是使用一个分布式缓存系统，比如mamcached
+***** State 
+***** Database transactions
+        
+*** Calling Tasks
+**** Basics：三种调用方式
+        apply_async(args[, kwargs[, …]])：发送一个任务消息
+        delay(*args, **kwargs)：快捷发送一个任务消息，但不支持执行选项。
+        calling(__call__)：
+**** Linking (callbacks/errbacks)：一个任务接着一个任务
+**** ETA and countdown
+**** Expiration：任务有效期
+**** Message Sending Retry：连接失败自动重试发送消息。
+        add.apply_async((2, 2), retry=True, retry_policy={
+             'max_retries': 3,
+             'interval_start': 0,
+             'interval_step': 0.2,
+             'interval_max': 0.2,
+             })
+**** Serializers
+        客户端到worker之间的数据转换需要系列化，因此每个消息有一个content_type的heaer来描述用于编码的序列化方法。执行选项 add.apply_async((10, 10), serializer='json')-----Task.serializer ----- CELERY_TASK_SERIALIZER 
+**** Compression
+        压缩消息：The compression execution option.--- Task.compression attribute ---  CELERY_MESSAGE_COMPRESSION 
+**** Connections
+        通过创建一个publisher手动处理一个连接。
+**** Routing options
+        路由任务到不同的队列 (CELERY_ROUTES).
+**** Advanced Options
+        exchange 
+        routing_key 
+        priority 0--9（0表示最高）
+
+*** Canvas: Designing Workflows
+**** Signatures
+        有时候需要传递一个任务调用的标志到另一个进程，或者作为一个参数传递给另一个函数。signature()封装一个函数调用作为一个参数。其实是一个subtasks的子任务重命名。
+        signature('tasks.add', args=(2, 2), countdown=10)
+        add.subtask((2, 2), countdown=10)
+        add.s(2, 2)
+        a Partials: 函数+参数--新的函数 
+            partial = add.s(i)--只有一个参数，叫partial，即incomplete signature，partial.delay(4)--这样加上一个参数之后才能相加，或者add.s(2,2)
+            如何运行
+            clone 之后赋给新的参数。
+        b Immutability不变性: 有时候想指定一个回调函数不带额外的参数，这时候就可以设置标志为immutable
+            add.apply_async((2, 2), link=reset_buffers.subtask(immutable=True))
+            或者使用快捷方式：.si()--add.apply_async((2, 2), link=reset_buffers.si())
+        c Callbacks: 通过给apply_async添加参数link可以在任何任务中添加callback
+                     回调只有在任务成功退出之后才运用，并且他会把父task的返回值作为一个参数来使用。
+            add.apply_async((2, 2), link=add.s(8)): 使用偏参数的回调：首先启动第一个任务计算2+2，然后启动另一个任务来计算4+8.
+**** The Primitives(基元，基本体)
+        group: 一个signature，列出了需要并行使用的tasks,返回结果时一个分别结果的list
+        chain：一个挨着一个运行，并把结果传递给后者。返一个函数，用get()来获取结果。可以时偏的partial
+        chord：带有callback的group,group里的完成之后执行回调。
+        map：参数list依次错用于task，会产生一个暂时的task
+        starmap：add.starmap([(2, 2), (4, 4)])
+        chunks：将一个长的list拆分成多个，分别产生task来执行。
+        
+*** Workers Guide
+    启动
+    停止
+    重启
+    并发： --concurrency 参数 默认为cpu数量
+
+*** Periodic Tasks 
+    使用celery_beat作为调度器scheduler, 定期发送任务，这些任务将在集群的worker节点上执行。
+    默认调度器入口在CELERYBEAT_SCHEDULE设置。
+    必须确保同一时间为单个规划之产生一个调度器，否则会得到重复的任务。
+    a Time Zones
+         CELERY_TIMEZONE 
+         Entries: CELERYBEAT_SCHEDULE 
+    b Crontab schedules定时规划
+    c Starting the Scheduler
+    
+    task重叠的情况：第一个还没有完成，第二个就开始了。避免这个问题使用lock，保证同一时间只有一个实例在运行。
+
+*** Routing Tasks
+   Basics: 
+       Automatic routing: 自动生成队列
+    
+    
+*** 参数 
+CELERY_QUEUES：指定消费者从哪里消费,默认时queue/exchange/binding key 
+CELERY_ROUTES：路由任务到队列
+
+启动：
+sudo -u nobody celery worker -A graphicControl.worker.mqttWorker -n mqttWorker_abcdxyz --concurrency=1 -l info -Q mqttTaskQueue --workdir /home/nobody &
+-A: Application
+-c 1 或者 --concurrency=1: 处理队列的子进程数量,默认和cpu数量（include cores）一样
+-Q QUEUE_name 或者 --queues=QUEUE_name : 激活这个worker的队列，用逗号隔开
+--workdir=WORKER_DIR : 
+-n HOSTNAME 或者 --hostname=HOSTNAME ： 最后启动之后显示为 celery@HOSTNAME
+    
+*** 小结
+**** 两种实例化方式
+#+BEGIN_SRC
+    from celery import Celery
+    app = Celery()
+#+END_SRC
+     
+#+BEGIN_SRC
+    from celery import Celery
+    app =  Celery('tasks')
+#+END_SRC
+
+**** rabbitmq和celery的关系
+   [http://shangliuyan.github.io/2015/07/04/celery%E6%9C%89%E4%BB%80%E4%B9%88%E9%9A%BE%E7%90%86%E8%A7%A3%E7%9A%84/](celery和rabbitmq的理解)
+   [http://rabbitmq-into-chinese.readthedocs.org/zh_CN/latest/tutorials_with_python/[1]Hello_World/](rabbitmq)
+   RabbitMQ是一个消息代理。它的核心原理非常简单：接收和发送消息。你可以把它想像成一个邮局：你把信件放入邮箱，邮递员就会把信件投递到你的收件人处。在这个比喻中，RabbitMQ就扮演着邮箱、邮局以及邮递员的角色。
+   RabbitMQ和邮局的主要区别是，它不是用来处理纸张的，它是用来接收、存储和发送消息（message）这种二进制数据的。
+   RabbitMQ和消息的专有名字：
+       生产(Producer): 发送消息的程序P----> 队列queue (决定消息去那个队列，这是也是一部分重要工作)----> 消费（Consumer）：等待获取消息的程序C
+       >发布者（producer）是发布消息的应用程序。
+       >队列（queue）用于消息存储的缓冲。
+       >消费者（consumer）是接收消息的应用程序。
+   关键词：
+   工作队列: 生产者发送消息---> queue -----> Consumer取出消息，执行任务
+       a 轮询循环任务
+       b 消息确认，保证消息不丢失,一个worker挂掉会分配其他worker继续执行，忘记确认不会释放徒耗内存,
+       c 消息持久化：若不持久化，rabbitmq退出或崩溃时会丢失所有队列和消息，因此，要把‘队列’和‘消息’设置为持久化
+        channel.queue_declare(queue='task_queue', durable=True)
+        channel.basic_publish(exchange='',
+        routing_key="task_queue",
+        body=message,
+        properties=pika.BasicProperties(
+        delivery_mode = 2, # make message persistent
+        ))。
+       d 公平调度：channel.basic_qos(prefetch_count=1) ，一个worker处理完上一条消息并回应之后在发给任务。
+   发布订阅:    
+       a 交换机：发发送者productor发送的消息发给队列，通过交换机类型累决定如何处理消息，创建某种类型的交换机：channel.exchange_declare(exchange='logs',  ----交换机名称
+                                                                                                                                       type='fanout')    ----交换机类型 
+       b 交换机类型：直连交换机，主题交换机，头交互机，扇形交互机，匿名交换机(消息根据制定的routing_key分发到制定的队列)。 
+       c 临时队列：连接rabbitmq时穿建议个临时的队列，与消费者断开链接的时候，这个队列应当被立即删除。exclusive标识符即可达到此目的：result = channel.queue_declare(exclusive=True)
+       d 绑定：告诉交换机如何发送消息给我们的队列。交换器和队列之间的联系我们称之为绑定（binding）。
+           channel.queue_bind(exchange='logs',
+                          queue=result.method.queue) -- result.method.queue表示所有生成的随机对列名。
+   路由Routing:
+       a 绑定:绑定（binding）是指交换机（exchange）和队列（queue）的关系。可以简单理解为：这个队列（queue）对这个交换机（exchange）的消息感兴趣。
+         路由Routing：使得它能够只订阅消息的一个字集(某种类型的消息)
+         绑定键：(属于队列)可以带上一个额外的routing_key参数，绑定键的意义取决于交换机（exchange）的类型。我们之前使用过的扇型交换机（fanout exchanges）会忽略这个值。
+         路由键：消息发布的时候会设定routing_key，匹配发往哪个队列的时候会匹配这个字段。
+       b 直连交换机（Direct exchange）: 交换机将会对绑定键（binding key）和路由键（routing key）进行精确匹配，从而确定消息该分发到哪个队列。
+   Topic:
+       Direct交换机能够改善我们的系统，但是它也有它的限制 —— 没办法基于多个标准执行路由操作。
+   远程过程调用(RPC): 将一个函数运行在远程计算机上并且等待从那儿获取结果.
+
+rabbitmq的配置：
+/etc/rabbitmq/rabbitmq.conf:
+#+BEGIN_SRC
+ [
+   {rabbitmq_stomp, [
+                        {default_user, [{login, "intorobot"},
+                        {passcode, "26554422"}]},
+                        {tcp_listeners, [61613]},
+                        {default_vhost, <<"stomp">>}]},
+   {rabbitmq_mqtt, [
+                        {default_user, [{login, "intorobot"},
+                        {passcode, "2655442"}]},
+                        {tcp_listeners, [5672]},
+                        {default_vhost, <<"/">>}]}
+].
+   
+#+END_SRC
+上面的user和密码表示什么user可以登陆这个虚拟机，所以我们要先使用：
+#+BEGIN_SRC
+   $ sudo rabbitmqctl add_user intorobot 26554422
+#+END_SRC
+建立用户.
+
+** RabbitMQ 
+*** 重要参数解释
+**** ack
+     
+**** prefetch
+
+*** 监控工具
+有一个很有用的监控工具可以监控rabbitmq的情况:
+[http://www.rabbitmq.com/management.html]
+这个监控工具有很多方便的功能:
+   | 序号 | 说明                                                                         |
+   |------+------------------------------------------------------------------------------|
+   |    1 | 可以声明,列出,删除诸如exchange,queues,bindings,users,virtual host 和 权限等; |
+   |    2 | 可以监控每个channel的队列长度,消息速率,以及每个连接的数据传输速率            |
+   |    3 | 发送和接受消息                                                               |
+   |    4 | 输入和输出一些object定义到json                                               |
+
+使用rabbitmq的插件rabbitmqadmin, 这个管理插件已经包含在rabbitmq中了, 通过下面的命令使能它:
+#+BEGIN_SRC
+    $ sudo rabbitmq-plugins enable rabbitmq_management
+#+END_SRC
+使能之后会提示你重启rebbitmq之后生效, 执行:
+#+BEGIN_SRC
+    $ sudo service rabbitmq_server restart
+#+END_SRC
+重启之后, 这个监控服务就启动了, 可以通过网页来访问:
+http://host-ip:15672
+来访问.
