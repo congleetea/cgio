@@ -1,0 +1,28 @@
+#+TITLE: 2016-05-27-NODEJ_install_node.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Friday, May 27 2016 
+#+OPTIONS: ^:nil
+
+** install nvm and source .xxshrc or others
+  $ curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.30.1/install.sh | bash
+
+会在zshrc中加入相应的路径配置信息:
+
+  $ source ~/.zshrc
+
+  Or
+
+  $ source ~/.bashrc
+** install node use 'nvm install node-version'
+  $ nvm install 5.6.0
+** install bower and source .xxshrc and use it to install deps
+  $ npm install -g bower
+** 下载依赖
+  $ bower install
+
+会根据bower.json来下载相应的依赖项。
+** 编译
+  $ npm run build 
+
+
