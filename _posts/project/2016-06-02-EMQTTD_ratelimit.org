@@ -1,0 +1,205 @@
+#+TITLE: 2016-06-02-EMQTTD_ratelimit
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Thursday, June  2 2016 
+#+OPTIONS: ^:nil
+
+* emqttd 的流控
+
+emqttd 的流控使用了两种流控方式的结合:　漏桶算法(leaky bucket)和令牌桶算法(token bucket)。
+
+** leaky bucket and token bucket
+*** leaky bucket
+    漏桶算法的思路是： 
+水先进入到桶里面（水进入桶里面的速度是我们服务器没有办法控制的），
+桶以恒定的速度漏水（这个是我们可以控制的），从小孔里面漏出去的水才算是真正能得到处理的，
+当桶没有满的时候，滴进桶里的水都会安全的从孔里面出去（也就是会得到真正的处理）；但是当
+桶满的时候，或者桶剩余的空间小于下次进来的水的体积的时候， 水就会溢出（对溢出的水的处理
+取决于你的运用，你可以丢弃，也可以让他等待处理）。也就是说这个桶才是真正的阀门，决定了
+这个水是被处理还是被丢弃。
+
+file:../../images/project/leaky-bucket.png
+
+    类比到网络里面，客户端的请求就是我们这里的水，客户端的请求是我们无法控制的，但是为了
+防止造成服务器的崩溃，因此我们使用漏桶算法来强行限制请求的传输数据，我们规定一个恒定的容量
+（就类似水桶的容量），这里的容量就是可以接受的数据包的字节大小，水漏出的速度就是我们限定的
+rate_limit值。
+
+*** token bucket
+    上面的漏桶算法强行的限制了请求的速度，但是有的时候我们还应该允许某种程度的突发传输。这
+时候就需要使用令牌桶算法。
+
+file:../../images/project/token-bucket.jpg
+
+    令牌桶算法的思路是系统以一定的恒定速度往桶里面放入令牌，请求进来之后都会先获取令牌，只有
+获取到令牌的请求才会被处理， 当桶里面没有令牌的时候，请求就会被拒绝。
+
+    通常两种算法会结合起来使用, EMQTTD 中就是结合两种算法来使用的。
+
+** EMQTTD 的流控方法
+  
+emqttd 的流控算法是在 esockd 依赖包里面实现的。
+首先我们在emqttd.config中进行listener的设置：
+#+BEGIN_SRC
+     %% Connection Options
+     {connopts, [
+        %% Rate Limit. Format is 'burst, rate', Unit is KB/Sec
+        {rate_limit, "100,30"} %% 100K burst, 10K rate
+     ]},
+#+END_SRC
+下面我们摘取这段代码来分析他的实现：
+#+BEGIN_SRC
+    %% 这里的Burst 和 Rate 就是config 里面的100和30. 
+    esockd_ratelimit:new(Burst, Rate).
+#+END_SRC 
+下面在esockd_ratelimit.erl中定义了相关的record： 也就是一个接纳连接的水桶。
+#+BEGIN_SRC
+-record(bucket, {capacity   :: pos_integer(),     %% tokens capacity
+                 remaining  :: non_neg_integer(), %% available tokens
+                 limitrate  :: float(),           %% bytes/millsec
+                 lastime    :: pos_integer()      %% millseconds
+                }).
+-type bucket() :: #bucket{}.
+-type ratelimit() :: {?MODULE, [bucket()]}.
+%%------------------------------------------------------------------------------
+%% @doc Create rate limiter bucket.
+%% @end
+%%------------------------------------------------------------------------------
+-spec new(pos_integer(), pos_integer()) -> ratelimit().
+new(Capacity, Rate) when Capacity > Rate andalso Rate > 0 ->
+    Bucket = #bucket{capacity = Capacity, 
+                     remaining = Capacity,
+                     limitrate = Rate/1000, 
+                     lastime = now_ms()},
+    {?MODULE, [Bucket]}.
+#+END_SRC
+
+上面的#bucket 里面四个量：
+| capacity  | bucket的容量， 可容纳的包的byte数, 就是我们设置的100KB， 即1024X100=120400Byte |
+| remaining | 接收完这个包之后剩余的容量                                                     |
+| limitrate | emqttd.config里面设置的流控Rate(KB), 除1000(1024大概)变成Byte/sec              |
+| lastime   | 上次接收包的时间(ms)                                                           |
+
+下面是实现：
+
+#+BEGIN_SRC
+%%------------------------------------------------------------------------------
+%% @doc Check inflow bytes.
+%% @end
+%%------------------------------------------------------------------------------
+-spec check(bucket(), pos_integer()) -> {non_neg_integer(), ratelimit()}.
+check(Bytes, {?MODULE, [Bucket = #bucket{capacity = Capacity, remaining = Remaining,
+                                         limitrate = Rate, lastime = Lastime}]}) ->
+    Tokens = lists:min([Capacity, Remaining + round(Rate * (now_ms() - Lastime))]),
+    {Pause1, NewBucket} =
+    case Tokens >= Bytes of
+        true  -> %% Tokens available
+            {0, Bucket#bucket{remaining = Tokens - Bytes, lastime = now_ms()}};
+        false -> %% Tokens not enough
+            Pause = round((Bytes - Tokens)/Rate),
+            {Pause, Bucket#bucket{remaining = 0, lastime = now_ms() + Pause}}
+    end,
+    {Pause1, {?MODULE, [NewBucket]}}.
+
+now_ms() ->
+    {MegaSecs, Secs, MicroSecs} = os:timestamp(),
+    (MegaSecs * 1000000 + Secs) * 1000 + round(MicroSecs/1000).
+#+END_SRC
+首先Bytes是接收到的packet的大小（Bytes），首先根据上次接收完之后剩余的容量Remaining，
+设置的流控Rate（Byte/sec），两次接收的时间差（ms）计算桶里面的tokens数量：
+#+BEGIN_SRC
+    Tokens = lists:min([Capacity, Remaining + round(Rate * (now_ms() - Lastime))]),
+#+END_SRC
+上面这个式子的结果在两个量之间选择小的，前面的Capacity表示的是桶的容量， 其实就是总量
+控制， 而后者就是速率控制。
+
+当token不够的时候， 根据速率可以计算出要暂停的时间。token足够的时候，暂停时间为0。这个值
+会返回到emqttd_client.erl里面：
+#+BEGIN_SRC
+init([OriginConn, MqttEnv]) ->
+    RateLimit = proplists:get_value(rate_limit, Connection:opts()),
+    State = run_socket(#client_state{connection   = Connection,
+                                     connname     = ConnName,
+                                     peername     = PeerName,
+                                     peerhost     = PeerHost,
+                                     peerport     = PeerPort,
+                                     await_recv   = false,     %% client一旦连接就把这个设置为false
+                                     conn_state   = running,   %% client一旦连接就把这个设置为running
+                                     rate_limit   = RateLimit,
+                                     parser_fun   = ParserFun,
+                                     proto_state  = ProtoState,
+                                     packet_opts  = PktOpts}),
+#+END_SRC
+在init函数中， 连接之后会获得流控的参数， 这里的RateLimit是一个带状态的模块：esockd_ratelimit
+状态是bucket的记录。
+
+随后， 在gen_server的handle中， 接收客户端的数据包：
+#+BEGIN_SRC
+handle_info({inet_async, _Sock, _Ref, {ok, Data}}, State) ->
+    Size = size(Data),
+    ?LOG(debug, "RECV ~p", [Data], State),
+    emqttd_metrics:inc('bytes/received', Size),
+    received(Data, rate_limit(Size, State#client_state{await_recv = false}));
+#+END_SRC
+在received函数里面， 调用了rate_limit函数(该函数返回client的State)， 执行这个函数将进行流控的检查
+，根据检查结果做出是否接纳这个请求包的决定。
+
+#+BEGIN_SRC
+rate_limit(_Size, State = #client_state{rate_limit = undefined}) ->
+    run_socket(State);
+%% cong ratelimit4: if ratelimit is setup in emqttd.config
+%%    R1=esockd_ratelimit with args which is a record named bucket.
+rate_limit(Size, State = #client_state{rate_limit = Rl}) ->
+    %% jump esockd_ratelimit:check(Size, {{bucket,102400,102400,10.24,1464834747856}})
+    case Rl:check(Size) of
+        {0, Rl1} ->
+            run_socket(State#client_state{conn_state = running, rate_limit = Rl1});
+        {Pause, Rl1} ->
+            ?LOG(error, "Rate limiter pause for ~p", [Pause], State),
+            erlang:send_after(Pause, self(), activate_sock),
+            State#client_state{conn_state = blocked, rate_limit = Rl1}
+    end.
+#+END_SRC
+分两种情况处理：
+如果在emqttd.config中没有对流控进行设置（undefined），那么就不进行流控的判断，一如既往的接收数据。
+
+如果设置了流控（Burst，Rate对应容量和速率），那么就会调用esockd_ratelimit:check进行检查，这里也是
+带状态的模块，会把上一次的状态带上进行检查。完成之后返回{暂停时间Pause，新的带状态的模块参数}，如
+果暂停时间为0，就置连接状态conn_state为running，继续执行；如果暂停时间非零，置conn_state为blocked
+阻塞状态，并启动一个定时器，过这个暂停时间之后发送activate_sock给self，有handle_info处理，激活这个
+socket。
+
+上面通过运行run_socket确定了socket的状态, run_socket返回client的socket状态：
+#+BEGIN_SRC
+run_socket(State = #client_state{conn_state = blocked}) ->
+    State;
+run_socket(State = #client_state{await_recv = true}) ->
+    State;
+run_socket(State = #client_state{connection = Connection}) ->
+    Connection:async_recv(0, infinity),
+    State#client_state{await_recv = true}.
+#+END_SRC
+结合前面的conn_state=running的状态， 这里的socket有三种状态：running，blocked，await_recv。 running
+表示这个socket正在运行，blocked表示这个socket处于阻塞状态，await_recv表示空闲等待接受消息,我们看到在
+一开始接受数据的handle_info函数里面，一旦接受到数据之后就会把await_recv置为false。
+
+在接收到activate_sock之后恢复conn_state=running, 随后将这个状态告诉服务器，而这个消息就被丢弃了，但是
+可以继续后面的接收。
+#+BEGIN_SRC
+handle_info(activate_sock, State) ->
+    hibernate(run_socket(State#client_state{conn_state = running}));
+
+hibernate(State) ->
+    {noreply, State, hibernate}.
+#+END_SRC
+完成之后， 执行received函数， 继续执行后面的解析packet等操作。
+
+
+
+
+emqttd 的流控结束。
+
+* reference
+[[http://www.javaranger.com/archives/1769][基于漏桶(Leaky bucket)与令牌桶(Token bucket)算法的流量控制]]
+
+
