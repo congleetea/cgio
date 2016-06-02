@@ -1,0 +1,92 @@
+#+TITLE: 2016-06-01-ERLNG_mnesia_overload.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Thursday, June  2 2016 
+#+OPTIONS: ^:nil
+
+
+
+* mnesia 的过载问题
+#+BEGIN_SRC
+    16:35:51.322 <0.205.0> [critical] Mnesia overload: {dump_log,write_threshold}
+    16:35:51.323 <0.249.0> [error] Unexpected Info: {mnesia_system_event,{mnesia_overload,{dump_log,write_threshold}}}
+#+END_SRC
+首先了解mnesia的基本存储方式, 主要参考 <<Mnesia 用户手册>> 第六章 Mnesia系统信息,
+明白一下几个概念:
+#+BEGIN_SRC
+转储表:
+
+定义为 ram_copies 类型的表仅能存储在内存中。但可以按一定的时间间隔或在系统关机之前将表
+转储到磁盘上。函数 mnesia:dump_tables(TabList)将 RAM 表的全部副本转储到磁盘上。转储到磁
+盘的表能够被存取。可被转储表的所有副本必须有存储类型 ram_copies。
+表的内容放在磁盘上的一个后缀为.DCD 的文件里。当 Mnesia 系统启动时,将从.DCD 文件加载数
+据初始化 RAM 表。
+#+END_SRC
+
+#+BEGIN_SRC
+日志文件:
+当我们启动 Mnesia 的时候,一个名为 LATEST.LOG 的文件被创建并且放在数据库目录内。这个
+文件被 Mnesia 用来对基于磁盘的事务做日志。这包括所有在存储类型为 disc_copies 或
+disc_only_copies 的表中至少写入一条记录的事务。还包括对模式本身所作的全部操作,如创建新
+表等。Mnesia 的不同实现的日志格式可能有变化。当前实现的 Mnesia 是标准库模块 disc_log。
+日志文件会持续增长,因此需要定期转储。对于 Mnesia“ 转储日志文件 ” 意味着执行在日志中列出
+的所有操作并且将记录存放到对应的.DAT、.DCD 和.DCL 文件中。例如,如果 “ 写记录{foo, 4,
+elvis, 6}” 操作被列入日志,Mnesia 插入此操作到 foo.DCL 中,随后在 Mnesia 认为.DCL 文件已
+经变得太大时,再将数据移入.DCD 文件。如果日志很大,转储操作可能非常耗时。因此,理解
+Mesia 系统在日志转储期间要持续运转是很重要的。
+在默认状态下,只要日志中写入了 100 条记录或者过去了 3 分钟这两种情况之一出现,Mnesia 即
+转储日志。可用两个应用程序参数-mnesia dump_log_write_threshold WriteOperations 和-mnesia
+dump_log_time_threshold MilliSecs 来对此进行控制。
+在日志被转储之前,文件 LATEST.LOG 改名为 PREVIOUS.LOG,并且创建一个新的
+LATEST.LOG 文件。日志转储成功后,文件 PREVIOUS.LOG 被删除。
+在启动时以及每当一个模式操作被执行时,也要转储日志。
+
+个人的理解:
+我们知道mongodb里面有一个journal文件, 里面记录的也是mongodb的操作, mnesia的日志文件
+功能就是类似的, 也是记录执行的操作的.
+
+定期转储: 
+也就是按照日志文件LASTEST.LOG(先更名为PREVIOUS.LOG,再新建一个LASTEST.LOG,
+转储完成之后再把PREVIOUS.LOG文件删除) 里面的操作把record写到磁盘中, 首先是到.DCL文
+件中, DCL文件内容太多了, 就再将数据移入.DCD中,如果日志很大, 转储操作是很耗时的.
+#+END_SRC
+[[http://erlang.org/doc/apps/mnesia/Mnesia_chap5.html#5.7][Miscellaneous Mnesia Features]] 中对这个过载事件进行了说明:
+#+BEGIN_SRC
+    当前节点上的 Mnesia 出 现 并且 过载订阅 者 应该 采取行 动 。
+典型的过载情况是应用程序对磁盘驻留表执行的更新超过了 Mnesia 的处理能力。无视这
+种类型的过载将导致磁盘空间耗尽的情况出现(不管存在磁盘上的文件尺寸有多大) 。
+每次更新被添加到事务日志并且有时(取决于是如何配置的)会转储到表文件。表文件的
+存储比事务日志的存储更紧凑,特别是在某些记录被反复更新的情况下。如果在前面的更
+新转储尚未结束之前,事务日志转储的阈值达到就会触发过载事件。
+过载的另一种典型情况是事务管理器不能在对磁盘驻留表执行更新的应用程序的相同空间
+里提交事务。这使得事务管理器的消息队列持续增长直到内存耗尽或负载能力下降。
+脏更新时也可能出现同样的问题。在当前节点发现的本地过载有可能是其它节点所引起的,
+应用程序处理驻留在其它节点上的表(副本或非副本)时可能会引起重负载。在默认情
+况下此事件报告给错误日志(error_logger )。
+#+END_SRC
+[[http://streamhacker.com/2008/12/10/how-to-eliminate-mnesia-overload-events/][HOW TO ELIMINATE MNESIA OVERLOAD EVENTS]] 文中消除这个错误提出了一些方法:
+
+***** synchronous writes 
+作者提出使用[[http://erlang.org/doc/apps/mnesia/Mnesia_chap4.html#4.5][sync transaction]] 或者 sync_dirty, 这样做是通过使用同步写入来减慢你
+写入的速度, 因为使用同步写入的话,只有record写入到事务log完成之后才会返回. mnesia默认使
+用的是异步方式, 这样操作就会很快(就是上面所说的对磁盘驻留表执行的更新过快), 导致转储到
+表文件的速度跟不上, 这就导致上面的error report.
+***** mnesia 运用的配置
+如果同步操作不能满足, 还有一个办法是修改两个比较难以理解的参数. mnesia_overload 时间主
+要是在transaction log 需要dump到磁盘, 但是前一个transaction log的dump还没有完成. 
+
+这里修改两个参数:
+#+BEGIN_SRC
+dc_dump_limit:
+这个参数控制disc_copies的表多久从内存转储一次, 默认值为4, 就是当log的大小超过表大小/4, 那
+就执行一次dump, 增加这个值, 转储的时间就会加快.
+#+END_SRC
+
+#+BEGIN_SRC
+dump_log_write_threshold: (写入多少次之后转储一次)
+这个参数定义了新的dump执行之前写入log的最大次数, 默认100,也就是事务log写入100次就执行一次
+dump, 可以设置为5000.
+dump_log_time_threshold: (最长隔多长时间转储一次)
+你可能会想如果前面的dump_log_write_threshold参数如果太大的话,可能会很长时间才进行一次dump,
+为了防止过长时间才dump一次, 可以设置这个值(ms), 每隔这段时间就进行一次转储. 
+#+END_SRC
