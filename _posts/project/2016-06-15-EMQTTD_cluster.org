@@ -127,6 +127,7 @@ change_config(Config, Value) -> {error, Reason} | {ok, ReturnValue}
 这样加入集群的节点之间的mnesia就会同步了。
 
 类似的leave和remove操作也是同样对mnesia进行操作。就详述了。
+
 ** erlang tips
 *** erlang的init模块
 | [[https://yq.aliyun.com/articles/42296][erlang 模块之 init]] |
@@ -467,11 +468,28 @@ file:../../images/project/11_topic_subscription.png
 这个表也是被同步的。
 
 
-*** 疑问
+*** emqttd集群应该注意的问题 
+**** 创建集群的顺序
+
 在建立集群的时候需要delete_schema，这个过程会把数据也一起删掉，这样丢失数据是不恰当的啊。该怎么处理？
 
 emqttd的例子里面就只说明了两个node的集群布置，所以我就以为可以在同一台机器上执行cluster join，这样就会出现上面的疑问了。
 这是思考方式出了问题。
 
 我们需要知道的是建立集群的时候会把schema删除掉，但是只是把执行join的那台机器上schema和数据清除掉，join的那台机器并没有被
-清除，所以如果要加一台机器，那就应该在这台新机器上执行join。
+清除，所以如果要加一台机器，那就应该在这台新机器上执行join。所以集群的布置顺序应该是新node和与旧node相连。
+
+**** 进程池设置
+进程池的名字不能一样，因为我们的进程池是global的，那样同样的名字就会在全局出现重复,最后导致失败。
+
+**** 使用haproxy进行负载均衡
+eg:
+#+BEGIN_SRC
+listen mqtt-tcp
+  bind *:1883
+  mode tcp
+  option tcplog
+  balance roundrobin                 %% 均衡算法(方式)
+  server emqttd1 192.168.33.12:1883  %% 第一台emqttd服务器
+  server emqttd2 192.168.33.16:1883  %% 第二台emqttd服务器
+#+END_SRC 
