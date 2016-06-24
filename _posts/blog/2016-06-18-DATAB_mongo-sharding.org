@@ -1,0 +1,1078 @@
+#+TITLE: 2016-06-18-DATAB_mongo-sharding.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Saturday, June 18 2016 
+#+OPTIONS: ^:nil
+
+* question
+
+| 1 mongodb目前的读写性能如何,跟哪些因素有关？ |
+| 2 mongodb的储存原理                          |
+| 3 改善mongodb性能的方法有哪些？              |
+| 4 sharding的原理是什么？                     |
+| 5 如何配置sharding？                         |
+
+references:
+
+| [[http://docs.mongoing.com/manual-zh/][MongoDB 3.2 中文文档]]   |
+| [[https://docs.mongodb.com/manual/][The MongoDB 3.2 Manual]] |
+
+* mongodb的性能
+| [[http://www.mongoing.com/archives/862][MongoDB 3.0 官方性能测试报告（I)：YCSB测试下的并发量提升]] |
+| [[https://cnodejs.org/topic/5518a873687c387d2f5b2953][新鲜出炉，Mongodb和SQLServer性能对比报告]]                 |
+| [[http://blog.jobbole.com/86079/][大数据时代的数据存储，非关系型数据库MongoDB]]              |
+
+** 和传统数据库设计上的差异
+*** 预设计模式和动态模式
+传统数据库需要预先设定好数据各个字段的类型(eg:mysql), mongodb则不需要事先对数据库进行设定。
+
+*** 范式化(normalization)和反范式化(denormalization)
+**** 范式化(normalization):
+是关系模型的发明者埃德加·科德于1970年提出这一概念，范式化会将数据分散到不同的表中，利用关系
+模型进行关联，由此带来的优点是，在后期进行修改时，不会影响到与其关联的数据，仅对自身修改即
+可完成
+
+**** 反范式化(denormalization):
+是针对范式化提出的相反理念，反范式化会将当前文档的数据集中存放在本表中，而不会采用拆分的方式
+进行存储。
+
+
+范式化和反范式化之间不存在优劣的问题，范式化的好处是可以在我们 *写入,修改,删除时的提供更高性
+能* ，而 *反范式化可以提高我们在查询时的性能* 。当然NoSQL中是不存在关联查询的，以此提高查询
+性能，但我们依旧可以在表中存储关联表ID的方式进行范式化。但由此可见，NoSQL的理念中反范式化的
+地位是大于范式化的。
+
+
+* 复制
+要了解集群首先应该了解复制集。
+
+复制是一个在多台servers之间 *进行同步数据的进程* ,复制集 *各个成员的数据是相同的* 。   
+
+本来单个mongod实例也可以促成一个sharding，但是在实际生产中，为了提高冗余和读写性能，我们应该
+把每个shard布置成一个复制集的形式。由于复制集之间的成员的 *数据是相同的*. *一方面* ，如果一
+个成员崩溃了，我们还可以从其他成员中获得数据，保证系统依然可用(即异地冗灾); *另一方面* ，客户
+端可以 *将读写请求分别发送到复制集的不同服务器上* ，进一步提高读写的性能。 
+
+** 复制集的组成
+| 名称          | 细分             | 可有数量   |
+|---------------+------------------+------------|
+| bearing nodes | a)primary node   | 1          |
+|               | b)secondary node | 一个或多个 |
+| arbitor node  |                  | 0个或一个  |
+
+一个数据集包含几个轴承节点(bearing nodes)和可选的一个仲裁节点(arbiter node, 注意后面的主节点不
+是仲裁节点), 在轴承节点中有且只有一个主节点(primary node), 其他的都是次要节点(secondary nodes).
+
+*** primary node 
+[[../../images/blog/mongodb_sharding/replica-set-read-write-operations-primary.png]]  
+
+*主节点接受所有的写操作* 。复制集有一个主要的功能是通过[[http://docs.mongoing.com/manual-zh/reference/write-concern.html#writeconcern."majority"][{w: "majority"}]],向所有投票节点确认数据已
+经写到了各个节点的磁盘journal, 当一个写操作返回[[http://docs.mongoing.com/manual-zh/reference/write-concern.html#writeconcern."majority"][{w: "majority"}]]响应给客户端客户端就可以读到写有
+"majority"写确认的结果了。尽管在有些情况下，其他的mongod实例也可以当做主节点。主节点在他的oplog
+里面记录数据集的所有改变。
+
+[[oplog]](operation log) 是一个保存所有修改你数据库的操作记录的特殊的capped collection。mongodb在 
+primary node上执行数据库操作，并在oplog中记录下这些操作。secondary nodes使用一个异步进程复制并
+执行这个oplog.所有的复制集成员都有这个log。在local.oplog.rs中记录了数据库当前的状态。[[../../files/blog/mongodb_sharding/oplog.org][oplog.org]]是这个
+collection中的部分内容，可以看到oplog里面到底是什么。
+
+*** secondaries nodes
+[[../../images/blog/mongodb_sharding/replica-set-primary-with-two-secondaries.png]] 
+
+secondaries *复制主节点上的oplog* ，并且 *在次要节点上执行这些反应主节点数据集的操作* 。当主节点
+不能使用的时候，一个可用的secondary将会成为新的primary(通过投票产生)。
+
+*** arbiter node (optional)
+[[../../images/blog/mongodb_sharding/replica-set-primary-with-secondary-and-arbiter.png]]
+
+仲裁节点不会维持数据集，他的作用是通过相应心跳来判断节点数目，同时响应其他复制集成员选举primary 
+node的请求。由于它维持数据集，因此可以不消耗多少资源就可以提供复制集的法定人数的功能。
+
+*仲裁节点始终是一个仲裁者,它不会变成其他主从节点* ，但是primary node可能辞职(step down)变成secondary, 
+secondary也可以并且通过选举变成primary.
+
+** 复制即的数据同步 
+为了保证各个成员的数据总是最新的，secondary成员有两种方式从其他节点上同步数据：一个数initial sync,
+另一个是同步不断改变的数据。
+
+*** initail sync 
+初始同步会将完整的数据集复制到各个节点上。当 *一个节点没有数据的时候* ，就会进行初始同步，比如，
+当它是新加的节点; 或者 *它的数据已经无法通过复制追上最新的数据了* ，也会进行初始同步。
+
+具体的过程是：
+**** 复制所有的数据库。 
+mongod 会查询所有的表和数据库，然后将所有的数据插入这些表的备份中，同时也会建立_id的索引. 应用数据
+集中所有的数据变动。 mongod 通过oplog来更新数据，从而让数据集保持最新的状态。
+**** 建立所有表上的索引（除了_id ，因为这个是之前已经建好的）。
+**** mongod 完成了所有的索引的建立，该节点将会变为正常的状态i.e. secondary。
+
+*** 连续复制同步
+secondary在完成initial sync之后就会不断地从primary中复制oplog并执行，以实现数据同步。
+
+*** 自动化故障切换
+当以个primary超过10s没有和集合的其他成员交流，第一个secondary就会收到很多成员的选举成为primary。
+
+*** 读操作
+默认客户端从primary上读取，然而，clients也可以指定一个[[http://docs.mongoing.com/manual-zh/core/read-preference.html][复制集读选项]] 来发送读操作到secondary上。
+但是异步复制意味着从secondary上读取的数据和primary上的数据可能不一样。
+
+复制集读选项决定了在复制集中读请求的路由方式。由于从节点的数据异步复制的原因，数据可能不是主节点
+最新的，因此，要谨慎选择是否使用从从节点读取。
+
+[[../../images/blog/mongodb_sharding/replica-set-read-preference.png]]
+
+** 复制集的部署
+*** 预先操作
+**** 数量 
+复制集应该保持奇数个节点，这才能保证选举可以正常进行。
+
+**** 位置
+在生产环境的部署中，我们应该尽可能将复制集中的节点布置在不同的机器上。
+
+**** 连通性
+布置之前我们要在复制集的所有机器上安装mongodb的实例, 而且复制集之间要可以通信(在网段),
+可以通过在一台机器上使用mongo登陆另一台机器看能够登陆。
+最后确保复制集各个节点可以互相通过DNS或主机名解析。我们需要配置DNS域名或设置/etc/hosts
+文件来配置。
+*** 部署一个异地复制集
+**** 启动mongod的问题
+[[http://wesleytsai.io/2015/07/26/mongodb-server-directory-permission-denied/][MongoDB Setup-Data Directory Not Found or Permissioin Denied]]
+
+| sudo mkdir -p /data/db              |
+| sudo chown -R $USER:$GROUP /data/db |
+
+我们分析一下原因：
+
+在我自己congleetea用户的电脑上， 我们通过ll查看/etc/mongod.config的关系：
+
+-rw-r--r-- 1 congleetea congleetea 643 Jun  8 09:04 /etc/mongod.conf
+
+显然，在我的电脑上安装了mongodb之后，默认这个文件属于congleetea:congleetea.
+
+在vagrant上，默认安装mongodb之后：
+#+BEGIN_SRC
+vagrant@myiotserver:~$ ll /etc/mongod.conf 
+-rw-r--r-- 1 root root 568 Jun  7 02:17 /etc/mongod.conf
+vagrant@myiotserver:~$ ll /var/lib/mongodb/
+total 148
+drwxr-xr-x  4 mongodb mongodb  4096 Jun 20 16:35 ./
+drwxr-xr-x 48 root    root     4096 Jun 20 16:32 ../
+-rw-r--r--  1 mongodb mongodb    46 Jun 20 16:32 WiredTiger
+-rw-r--r--  1 mongodb mongodb    21 Jun 20 16:32 WiredTiger.lock
+-rw-r--r--  1 mongodb mongodb   915 Jun 20 16:35 WiredTiger.turtle
+-rw-r--r--  1 mongodb mongodb 45056 Jun 20 16:35 WiredTiger.wt
+-rw-r--r--  1 mongodb mongodb  4096 Jun 20 16:32 WiredTigerLAS.wt
+-rw-r--r--  1 mongodb mongodb 16384 Jun 20 16:33 _mdb_catalog.wt
+-rw-r--r--  1 mongodb mongodb 16384 Jun 20 16:33 collection-0-5232019746169820554.wt
+drwxr-xr-x  2 mongodb mongodb  4096 Jun 21 01:44 diagnostic.data/
+-rw-r--r--  1 mongodb mongodb 16384 Jun 20 16:33 index-1-5232019746169820554.wt
+drwxr-xr-x  2 mongodb mongodb  4096 Jun 20 16:32 journal/
+-rw-r--r--  1 mongodb mongodb     5 Jun 20 16:32 mongod.lock
+-rw-r--r--  1 mongodb mongodb 16384 Jun 20 16:34 sizeStorer.wt
+-rw-r--r--  1 mongodb mongodb    95 Jun 20 16:32 storage.bson
+vagrant@myiotserver:~$ ll /var/log/mongodb/
+total 12
+drwxr-xr-x  2 mongodb mongodb 4096 Jun 20 16:32 ./
+drwxrwxr-x 11 root    syslog  4096 Jun 20 16:32 ../
+-rw-r--r--  1 mongodb mongodb 1884 Jun 20 16:32 mongod.log
+vagrant@myiotserver:~$ 
+#+END_SRC
+可以看配置文件/etc/mongo.conf属于root用户的, 其他两个目录，即保存数据的/var/lib/mongodb和/var/log/mongodb/
+则是属于mongodb:mongodb的。
+
+因此，我们在启动mongod的时候， 我们需要加上sudo。并指定配置文件：
+
+$ sudo mongod --config /etc/mongod.conf
+
+通过ps可以观察是否启动。
+
+现在我们有三台机器：
+10.47.33.10  primary
+10.47.33.20  secondary
+10.47.33.21  secondary
+
+**** 配置文件及启动
+#+BEGIN_SRC
+# mongod.conf
+storage:
+  dbPath: /var/lib/mongodb
+  journal:
+    enabled: true
+systemLog:
+  destination: file
+  logAppend: true
+  path: /var/log/mongodb/mongod.log
+
+net:
+  port: 27017
+  bindIp: 10.47.33.10
+replication:
+  replSetName: rs0
+#+END_SRC
+
+按照同样的配置， 启动mongod，后面我们就可以使用mongo <ip>来登陆控制台了。
+
+**** 初始化复制集，添加复制集
+
+在复制集的一台机器上执行， 注意只能在一台机器上执行，通常第一台机器将作为primary。
+
+#+BEGIN_SRC
+vagrant@myjumper:~$ mongo 10.47.33.10
+MongoDB shell version: 3.2.7
+connecting to: 10.47.33.10/test
+Server has startup warnings: 
+2016-06-21T02:17:20.945+0000 I CONTROL  [initandlisten] ** WARNING: You are running this process as the root user, which is not recommended.
+2016-06-21T02:17:20.945+0000 I CONTROL  [initandlisten] 
+> rs.initiate()
+{
+	"info2" : "no configuration specified. Using a default configuration for the set",
+	"me" : "10.47.33.10:27017",
+	"ok" : 1
+}
+rs0:OTHER> rs.conf()
+{
+	"_id" : "rs0",                                    ## 复制集名称, 复制集的名称必须唯一，在配置文件中进行了配置replSetName。
+	"version" : 1,                                    ## 通常和复制集的成员个数相同  
+	"protocolVersion" : NumberLong(1),
+	"members" : [                                     ## 复制集的成员
+		{
+			"_id" : 0,                        ## 成员的标识符，0-255之间
+			"host" : "10.47.33.10:27017",
+			"arbiterOnly" : false,
+			"buildIndexes" : true,
+			"hidden" : false,
+			"priority" : 1,
+			"tags" : {
+				
+			},
+			"slaveDelay" : NumberLong(0),
+			"votes" : 1                        ## 是否是投票节点，0表示非投票节点
+		}
+	],
+	"settings" : {
+		"chainingAllowed" : true,
+		"heartbeatIntervalMillis" : 2000,
+		"heartbeatTimeoutSecs" : 10,
+		"electionTimeoutMillis" : 10000,
+		"getLastErrorModes" : {
+			
+		},
+		"getLastErrorDefaults" : {
+			"w" : 1,
+			"wtimeout" : 0
+		},
+		"replicaSetId" : ObjectId("5768a5be5cf22bd9755b773d")
+	}
+}
+rs0:PRIMARY> rs.add("10.47.33.20")                     ## PRIMARY, 使用rs.add添加一个成员
+{ "ok" : 1 }
+rs0:PRIMARY> rs.add("10.47.33.21")                     ## 使用rs.add添加另一个成员
+{ "ok" : 1 }
+rs0:PRIMARY> rs.conf()
+{
+	"_id" : "rs0",                                  ## 复制集的名称
+	"version" : 3,                                  ## 
+	"protocolVersion" : NumberLong(1),
+	"members" : [
+		{
+			"_id" : 0,
+			"host" : "10.47.33.10:27017",
+			"arbiterOnly" : false,
+			"buildIndexes" : true,
+			"hidden" : false,
+			"priority" : 1,
+			"tags" : {
+				
+			},
+			"slaveDelay" : NumberLong(0),
+			"votes" : 1
+		},
+		{
+			"_id" : 1,
+			"host" : "10.47.33.20:27017",
+			"arbiterOnly" : false,
+			"buildIndexes" : true,
+			"hidden" : false,
+			"priority" : 1,
+			"tags" : {
+				
+			},
+			"slaveDelay" : NumberLong(0),
+			"votes" : 1
+		},
+		{
+			"_id" : 2,
+			"host" : "10.47.33.21:27017",
+			"arbiterOnly" : false,
+			"buildIndexes" : true,
+			"hidden" : false,
+			"priority" : 1,
+			"tags" : {
+				
+			},
+			"slaveDelay" : NumberLong(0),
+			"votes" : 1
+		}
+	],
+	"settings" : {
+		"chainingAllowed" : true,
+		"heartbeatIntervalMillis" : 2000,
+		"heartbeatTimeoutSecs" : 10,
+		"electionTimeoutMillis" : 10000,
+		"getLastErrorModes" : {
+			
+		},
+		"getLastErrorDefaults" : {
+			"w" : 1,
+			"wtimeout" : 0
+		},
+		"replicaSetId" : ObjectId("5768a5be5cf22bd9755b773d")
+	}
+}
+#+END_SRC
+首先使用rs.initiate()使用默认的复制集配置对复制集进行初始化。
+然后会返回当前的复制集配置，执行这个命令也就意味着我们要把这个节点当做primary。
+紧接着我们使用rs.add命令把其他配置在这个复制集的成员也添加进来.
+
+现在我们启动10.47.33.20和10.47.33.21的控制台, 发现提示rs0:SECONDARY：
+#+BEGIN_SRC
+vagrant@mydb1:~$ mongo 10.47.33.20
+MongoDB shell version: 3.2.7
+connecting to: 10.47.33.20/test
+Server has startup warnings: 
+2016-06-21T02:24:59.290+0000 I CONTROL  [initandlisten] ** WARNING: You are running this process as the root user, which is not recommended.
+2016-06-21T02:24:59.290+0000 I CONTROL  [initandlisten] 
+rs0:SECONDARY> 
+#+END_SRC
+
+一旦完成添加之后，我们有就有一个完整的复制集了。这时候新的复制集将会选举处一个新的primary。
+
+我们可以在任何一台机器上查看rs的状态。
+
+**** 读写操作
+在rs.status()我们发现这些变量,这里面有一些变量是和读写操作有关的：
+#+BEGIN_SRC
+rs0:PRIMARY>  rs.status()                                               ## 检查复制集状态
+{
+	"set" : "rs0",                                                  ## 复制集的名称 
+	"date" : ISODate("2016-06-21T03:00:10.090Z"),                   ## 当前时间 
+	"myState" : 1,                                                  ## 0-10之间的整数，表示成员的状态，参考 http://docs.mongoing.com/manual-zh/reference/replica-states.html
+	"term" : NumberLong(1),
+	"heartbeatIntervalMillis" : NumberLong(2000),                   ## 每个节点发送心跳包的时间间隔，2s
+	"members" : [
+		{
+			"_id" : 0,
+			"name" : "10.47.33.10:27017",
+			"health" : 1,                                   ## 节点是否健康
+			"state" : 1,                                    ## 状态 0-10之间的整数
+			"stateStr" : "PRIMARY",                         ## 节点身份
+			"uptime" : 2570,                                ## 这个节点运行时间
+			"optime" : {                                    ## oplog中上次运用用到这个节点操作的时间，对于复制集，三个节点都会用到。
+				"ts" : Timestamp(1466476017, 1),
+				"t" : NumberLong(1)
+			},
+			"optimeDate" : ISODate("2016-06-21T02:26:57Z"), ## 上次操作这个节点的时间
+			"electionTime" : Timestamp(1466475967, 1),      ## 该primary节点选举的时间戳, 从节点没有这个量
+			"electionDate" : ISODate("2016-06-21T02:26:07Z"),## 选举时间的ISO表示
+			"configVersion" : 3,
+			"self" : true
+		},
+		{
+			"_id" : 1,
+			"name" : "10.47.33.20:27017",
+			"health" : 1,
+			"state" : 2,
+			"stateStr" : "SECONDARY",
+			"uptime" : 1997,
+			"optime" : {
+				"ts" : Timestamp(1466476017, 1),
+				"t" : NumberLong(1)
+			},
+			"optimeDate" : ISODate("2016-06-21T02:26:57Z"),
+			"lastHeartbeat" : ISODate("2016-06-21T03:00:08.603Z"),
+			"lastHeartbeatRecv" : ISODate("2016-06-21T03:00:09.542Z"),
+			"pingMs" : NumberLong(0),
+			"syncingTo" : "10.47.33.10:27017",
+			"configVersion" : 3
+		},
+		{
+			"_id" : 2,
+			"name" : "10.47.33.21:27017",
+			"health" : 1,
+			"state" : 2,
+			"stateStr" : "SECONDARY",
+			"uptime" : 1992,
+			"optime" : {
+				"ts" : Timestamp(1466476017, 1),
+				"t" : NumberLong(1)
+			},
+			"optimeDate" : ISODate("2016-06-21T02:26:57Z"),
+			"lastHeartbeat" : ISODate("2016-06-21T03:00:08.603Z"),
+			"lastHeartbeatRecv" : ISODate("2016-06-21T03:00:09.697Z"),
+			"pingMs" : NumberLong(0),
+			"syncingTo" : "10.47.33.10:27017",
+			"configVersion" : 3
+		}
+	],
+	"ok" : 1
+}
+rs0:PRIMARY> 
+#+END_SRC
+
+下面我们测试一下读写操作， 
+我们现在primary节点上执行写操作：
+#+BEGIN_SRC
+rs0:PRIMARY> show dbs
+local  0.000GB
+rs0:PRIMARY> db.datas.find()
+rs0:PRIMARY> db.datas.insert({x: 1, y: 2})
+WriteResult({ "nInserted" : 1 })
+rs0:PRIMARY> show dbs
+local  0.000GB
+test   0.000GB
+rs0:PRIMARY> show collections
+datas
+rs0:PRIMARY> use test
+switched to db test
+rs0:PRIMARY> show collections
+datas
+rs0:PRIMARY> db.datas.find()
+{ "_id" : ObjectId("5768b25482f22d74b4b3ffd2"), "x" : 1, "y" : 2 }
+rs0:PRIMARY> db.datas.insert({x: 2, y: 2})
+WriteResult({ "nInserted" : 1 })
+rs0:PRIMARY> 
+#+END_SRC
+我们在primary节点上执行了上面的读写操作， 然后我们可以在任何一个节点上查看db的状态。
+下面我们是在从节点上查看的：
+#+BEGIN_SRC
+rs0:SECONDARY> db.stats()         # 第一次执行insert时
+{
+	"db" : "test",
+	"collections" : 1,    
+	"objects" : 1,            # 插入的object个数
+	"avgObjSize" : 44,
+	"dataSize" : 44,
+	"storageSize" : 16384,
+	"numExtents" : 0,
+	"indexes" : 1,
+	"indexSize" : 16384,
+	"ok" : 1
+}
+rs0:SECONDARY> db.stats()
+{
+	"db" : "test",
+	"collections" : 1,
+	"objects" : 2,
+	"avgObjSize" : 44,
+	"dataSize" : 88,
+	"storageSize" : 16384,
+	"numExtents" : 0,
+	"indexes" : 1,
+	"indexSize" : 16384,
+	"ok" : 1
+}
+
+#+END_SRC
+我们发现在secondary上我们连show dbs都没法运行。
+#+BEGIN_SRC
+rs0:SECONDARY> show dbs
+2016-06-21T03:48:55.607+0000 E QUERY    [thread1] Error: listDatabases failed:{ "ok" : 0, "errmsg" : "not master and slaveOk=false", "code" : 13435 } :
+_getErrorWithCode@src/mongo/shell/utils.js:25:13
+Mongo.prototype.getDBs@src/mongo/shell/mongo.js:62:1
+shellHelper.show@src/mongo/shell/utils.js:760:19
+shellHelper@src/mongo/shell/utils.js:650:15
+@(shellhelp2):1:1
+#+END_SRC
+这里显示错误原因：
+"not master and slaveOk=false" 也就是说这个节点不是master节点，并且slaveOk=false了。
+
+我们改变一下，方便在从节点上查看是否真的复制成功了，我们直接在从节点上执行(不鼓励这样做)：
+#+BEGIN_SRC
+rs0:SECONDARY> rs.slaveOk()
+rs0:SECONDARY> show dbs
+local  0.000GB
+test   0.000GB
+rs0:SECONDARY> use test
+switched to db test
+rs0:SECONDARY> db.datas.find()
+{ "_id" : ObjectId("5768b25482f22d74b4b3ffd2"), "x" : 1, "y" : 2 }
+{ "_id" : ObjectId("5768b33582f22d74b4b3ffd3"), "x" : 2, "y" : 2 }
+rs0:SECONDARY> 
+#+END_SRC
+现在我们可以再上面执行读的操作了,我们看看写操作怎么样：
+#+BEGIN_SRC
+rs0:SECONDARY> db.datas.insert({x:3, y:3})
+WriteResult({ "writeError" : { "code" : 10107, "errmsg" : "not master" } })
+rs0:SECONDARY>
+#+END_SRC
+error了，原因是该节点不是master节点。可见即使我们配置了slaveOk，但也只是可读，不可写。
+
+其实从原理上来说，复制集的所有操作都是从primary到secondiries的，所以对secondaries不应该给出读写的操作。
+对于读写分离，前面我们提到可以设置读取选项来路由客户端的读操作。
+
+如果一台机器挂掉了，会怎么办， 根据前面的介绍，如果primary挂掉了，那么一定会从secondaries中选举出一台primary来。
+现在我们让primary的机器reboot，我们发现现在10.47.33.20变成了primary了, 接着我们在把10.47.33.10(旧的primary)启动
+mongod，我们发现现在他变成了secondary了。
+
+**** 节点选举成为primary的优先级配置
+***** 为什么需要设置优先级?
+有时候你可能想让某个数据中心节点被优先选举为primary。你可以通过修改该节点成员的优先级
+比其他节点优先级高来实现。
+
+当然，有些节点是不适合成为primary的，这些节点的优先级应该设为0. 这些节点可能存在网络的
+限制，或者其他某些受限的资源。
+***** 如何设置
+下面我们把集合的第二个节点的优先级设置为0.5
+****** 使用rs.conf()查看并确认你要修改优先级的机器的标号，即members里面的_id号。 
+#+BEGIN_SRC
+"members" : [
+        {....
+        },
+     	{
+			"_id" : 2,
+			"host" : "10.47.33.22:27019",
+			"arbiterOnly" : false,          # 是否是专属仲裁节点
+			"buildIndexes" : true,
+			"hidden" : false,               # 是否时隐藏节点
+			"priority" : 1,                 # 成为primary的优先级
+			"tags" : {
+				
+			},
+			"slaveDelay" : NumberLong(0),
+			"votes" : 1                     # 是否是投票节点
+		},
+         {...
+         }
+]
+#+END_SRC
+****** 修改配置
+*注意，reconfig只能在primary上执行* , 通过rs.status()可以知道那个机器是primary。
+#+BEGIN_SRC
+> cfg = rs.conf()
+> cfg.members[2].priority = 0.5
+> rs.reconfig(cfg)
+#+END_SRC
+我们再次使用rs.conf查看，发现优先级已经变为0.5了.
+
+*** 部署用于测试和开发的复制集
+    我们在10.47.33.22上布置三个节点的复制集.
+#+BEGIN_SRC
+sudo mkdir -p /srv/mongodb/rs0-0 /srv/mongodb/rs0-1 /srv/mongodb/rs0-20
+sudo mongod --port 27017 --dbpath /srv/mongodb/rs0-0 --replSet rs0 --smallfiles --oplogSize 128
+sudo mongod --port 27018 --dbpath /srv/mongodb/rs0-1 --replSet rs0 --smallfiles --oplogSize 128
+sudo mongod --port 27019 --dbpath /srv/mongodb/rs0-2 --replSet rs0 --smallfiles --oplogSize 128
+
+
+login port 27017:
+mongo --port 27017
+> rs.initiate()
+> rs.add("10.47.33.22:27017")
+> rs.add("10.47.33.22:27018")
+> rs.add("10.47.33.22:27019")
+
+
+finished, OK
+#+END_SRC
+ 
+*** 为复制集增加一个投票节点
+**** 预备知识
+投票节点是复制集中的一个不包含数据的 *mongodb实例* 。投票节点参与选举来打破投票僵局。
+如果复制集拥有偶数个节点， 那么请增加一个投票节点。
+
+投票节点仅需很少的资源，对硬件也没有要求。我们可以将投票节点部署在一个 *应用服务* 的
+机器上或是一个 *监控机* 上。
+
+*尽量不要将投票节点部署在复制集节点的机器上。*
+
+投票节点不储存数据，但是一旦其加入到复制集中，投票节点将像其他节点一样开始建立自己的
+数据文件和 journal 。为了让其占用的空间尽可能小， 请设置：
+#+BEGIN_SRC
+storage.journal.enabled: false
+#+END_SRC
+*千万注意，不要在保存数据的节点上设置journal为false*
+
+为投票节点建立数据目录。mongod实例将在这个目录中存储配置数据。该文件夹不会存有数据集。
+
+**** 添加仲裁节点作为投票节点
+***** sudo mkdir -p /srv/mongodb/arb 
+***** start arbiter 
+sudo mongod --port 27020 --dbpath /srv/mongodb/arb --replSet rs0
+
+这样为上面建立的复制集rs0添加一个投票节点，投票节点断开为27020. 本质上它还是一个mongod
+实例。 
+***** add arbiter in primary node
+登陆到primary node的mongo上，添加方才启动的arbiter：
+$ mongo --port 27017
+rs0:PRIMARY> rs.addArb("10.47.33.22:27020")
+
+*** 将单节点转为复制集
+该过程其实很简单，先把已有的mongod实例kill掉，启动的时候附带上参数 --replSet setName即可。
+后面的步骤就是一样的了。
+
+*** 增减换复制集节点
+**** 添加复制集的节点
+一个复制集可以有高达50个成员，但是最多只能有7个投票节点，如果你想在复制集中添加更多的节点，
+那么你需要设置members[n].votes为0，将它作为非投票节点，或者删除一个已有的投票节点。     
+
+保证所有节点启动都带有相同的复制集名称。
+***** 准备数据目录
+请确认新节点的数据目录 *没有* 数据。新节点将会从已有节点中复制数据。如果新节点在 recovering 
+状态，不必担心，在MongoDB *复制完毕所有的数据* 之前，它将都会是该状态，如果复制完毕，则会变为
+secondary 。
+
+
+从已有的节点上手动的复制数据。新节点会成为从节点并赶上复制集的最新的数据集状态。这样复制数
+据可以减少新节点从初始化到可用所需的时间。确保我们从新节点上复制来的数据是在 window allowed
+ by the oplog 之内的。不然的话，新的节点还是需要全新的初始化复制，将会从其他节点上复制所有的
+数据， 如 复制集成员的重新同步 所介绍的一样。
+
+*如何从已有节点手动复制后面研究* ,如果需要同步的数据量比较大的话，这种方式比较好。
+
+使用 rs.printReplicationInfo() 来确认复制集的oplog状态。
+***** 到primary节点进行添加
+#+BEGIN_SRC
+rs0:PRIMARY> rs.add("<hostname>:<port>")
+#+END_SRC
+当然也可以在添加的时候设置其他的一些参数：
+#+BEGIN_SRC
+rs2:PRIMARY> rs.add({_id: <number>, host: "<hostname>:<ip>", priority: 0, hidden: true})
+#+END_SRC
+
+**** 移除复制集节点
+***** use rs.remove() in primary node 
+****** 关闭我们想要移除的 mongod 实例，可以通过在 mongo 的窗口中执行 db.shutdownServer() 来关闭。
+       经测试，不关闭想要移除的mongod实例，也可以remove。但是既然教程这个说了，还是遵守他的规则吧。
+****** 连接到复制集现在的 primary 。我们可以连接到任意一个复制集节点并执行 db.isMaster() 来确认是否为主节点。
+****** 通过 rs.remove() 来移除节点
+复制集将会短暂的关闭连接并进入选举，选举出一个新的主节点。接口将会自动重连。接口将会报错 
+DBClientCursor::init call() failed 即使删除节点成功了。
+
+***** use rs.reconfig() in primary node 
+通过配置cfg.members.splice()来移除。
+
+**** 更换复制集节点
+我如果我们需要修改复制集节点的主机名而不修改其他配置，那么本文描述的操作将有所帮助。举个例子，
+如果我们必须重装系统或是修改主机名，我们就可以用下列操作来尽可能减少变动。
+
+修改方法其实和前面所有修改conf里的量一样的，要修改host就只要members里面对应的host就可。
+
+*** 节点配置指南
+本节内容大都是修改conf选项。配置完成之后使用rs.reconfig来使之生效。
+**** 修改复制集节点的优先级，我们通过设置不同的优先级来提高部分节点成为主节点的可能性，也可以让某些节点不能成为主节点。
+优先级可以是0~1000的所有浮点数，默认是1.
+
+隐藏节点和延时节点的优先级要设置为0，因为他们不能成为primary。
+
+**** 配置一个隐藏节点
+先明白隐藏节点是用来做什么的。[[http://docs.mongoing.com/manual-zh/core/replica-set-hidden-member.html][隐藏节点]] 维护primary的数据集，但是对client application不可见。优先级为0，
+可以参与投票，但是不能成为primary。它有益于工作量的安排。
+
+[[../../images/blog/mongodb_sharding/replica-set-hidden-member.png]]
+
+***** 关于隐藏节点
+****** 读操作
+客户端将不会把读请求分发到隐藏节点上，即使我们设定了 [[http://docs.mongoing.com/manual-zh/core/read-preference.html][复制集读选项]] 。这些隐藏节点将不
+会收到来自应用程序的请求。我们可以将隐藏节点专用于报表节点或是备份节点。 延时节点 也
+应该是一个隐藏节点。
+
+在分片集群中， mongos 将不与隐藏节点进行交流
+****** 投票
+在复制集的选举中，隐藏节点是 *会参加投票* 的。当关闭一个隐藏节点的时候，请确认复制集中
+的可用节点个数足够进行选举，以防主节点降职导致复制集对外不可用。
+***** 配置
+#+BEGIN_SRC
+cfg = rs.conf()
+cfg.members[0].priority = 0
+cfg.members[0].hidden = true
+rs.reconfig(cfg)
+#+END_SRC
+设置完毕后，该从节点的优先级将变为 0 来防止其升职为主节点，同时其也是对应用程序不可见的。
+在其他节点上执行 isMaster 或是 db.isMaster() 将不会显示隐藏节点。
+
+**** 配置一个延时节点
+***** 关于延时节点
+延时节点也将从 复制集 中主节点复制数据，然而延时节点中的数据集将会比复制集中主节点的数据延后。举个例子，现在是09：52，如果延时节点延后了1小时，那么延时节点的数据集中将不会有08：52之后的操作。
+
+由于延时节点的数据集是延时的，因此它可以帮助我们在人为误操作或是其他意外情况下恢复数据。举个例子，当应用升级失败，或是误操作删除了表和数据库时，我们可以通过延时节点进行数据恢复。
+***** 配置
+#+BEGIN_SRC
+cfg = rs.conf()
+cfg.members[0].priority = 0
+cfg.members[0].hidden = true
+cfg.members[0].slaveDelay = 3600
+rs.reconfig(cfg)
+#+END_SRC
+
+**** 配置一个不参与投票的节点
+#+BEGIN_SRC
+cfg = rs.conf()
+cfg.members[3].votes = 0
+cfg.members[4].votes = 0
+cfg.members[5].votes = 0
+rs.reconfig(cfg)
+#+END_SRC
+
+* 分片(sharding)
+分片是使用多个机器存储数据的方法, MongoDB使用分片以支持巨大的数据存储量与对数据操作.
+
+注意，shards上的数据是不一样的，不像复制集的各个node。
+
+** 分片的目的
+高数据量和吞吐量的数据库应用会对单机的性能造成较大压力,大的查询量会将单机的CPU耗尽,
+大的数据量对单机的存储压力较大,最终会耗尽系统的内存而将压力转移到磁盘IO上.
+
+解决方法：
+| 纵向扩展 | 提高服务器的硬件配置,如CPU和RAM      |
+| 横向扩展 | 在多台机器上分布式布置数据，sharding |
+
+分片为应对高吞吐量与大数据量提供了方法.
+*** 高存储，高吞吐 
+使用分片减少了每个分片需要处理的请求数,因此,通过 水平扩展 ,集群可以提高自己的存储容量和吞吐量.
+举例来说,当插入一条数据时,应用只需要访问存储这条数据的分片.
+*** 减少了每个分片存储的数据
+比如，有1T的数据集，那么如果有4个shards，没有shard就可能只维持256G的数据，如果有40个shards，每
+个shard就只需要维持25G的数据。
+
+** MongoDB的分片
+[[../../images/blog/mongodb_sharding/sharded-collection.png]]
+
+*** 通过配置[[http://docs.mongoing.com/manual-zh/reference/glossary.html#term-sharded-cluster][集群]] 支持分片 
+mongodb 集群有三部分内容组成
+| mongos        |
+| config server |
+| shards        |
+
+[[../../images/blog/mongodb_sharding/sharded-cluster.png]]
+
+**** mognos
+mongos实例将从运用端来的读写操作路由到各个shards，applications不会直接接触shards。
+
+**** shards
+单个server或者复制集，保存被sharded的collection的一部分。
+
+[[../../images/blog/mongodb_sharding/sharded-cluster-primary-shard.png]]
+
+如上图所示，每个数据库(cluster here)都有一个主分片，用来存储这个数据库中所有未开启分片的集合的数据
+(也就是说哪些collection需要进行分片是要你设置的，如果没有设置，他就回存在这个主分片上)。上图中的
+Collection2就是没有设置分片的。
+
+可以通过命令 movePrimary 来改变主分片，但是迁移过程需要花很大的时间，迁移完成之前collection不能使用。
+
+**** config server
+维持集群的元数据，比如数据在shard中的位置。可配置为复制集[start in mongodb3.2], 使用复制集可以改
+善config servers之间的一致性，因为mongodb可以利用config data的标准复制集读写协议.此外， 使用复制
+集允许有超过三个的config servers，因为复制集可以高达50个成员。要布置config server为复制集，config
+servers *必须运行WiredTiger storage engine* 。
+
+如果集群中一个或者两个配置服务器不可用,集群的元信息将变为 可读 ,你还可以从分片中读写信息,但是数
+据块的迁移以及数据块的分裂在所有配置服务器都恢复可用之前不能够进行.
+
+配置config server 为复制集需要：
+| 不能有仲裁节点                                      |
+| 不能有延时节点                                      |
+| 必须建立索引(所有成员的buildIndexes设置不能为false) |
+
+一个cluster有自己的config server，多个cluster不能公用一个config server。
+
+***** config Server上的读写操作
+config serser在config database中保存cluster的metadata，mongos实例缓存这些消息并使用他们将读写操作
+路由到各个shards。
+****** about write op
+mongodb只有当元数据改变的时候才 *写数据* 到config server中，比如：
+| chunk migration之后 |
+| chunk split之后     |
+要写到config的复制集中，mongodb 要使用 "majority"的 [[https://docs.mongodb.com/manual/reference/write-concern/#wc-w][write concern]]
+****** about read op
+mongodb在下面情况下才从config server中 *读取数据* :
+| 一个新的mongos首次启动，或者已有的mongos重启 |
+| 如chunk migration这样的cluster元数据发生改变 |
+同样，读取的时候mongodb使用majority的 [[https://docs.mongodb.com/manual/reference/read-concern/][read concern]] 级别.
+
+***** config server availability
+如果config server 的复制集 *失去了primary(secondaries还能用)* ，那么集群的元数据将变为可读。
+此时你可以从shards上进行读写，但是数据块的迁移(migration)和分裂(splits)就不会发生了，知道重
+新选举出primary。 如果 *config server的所有databases(metadata)都不能访问* 了，那么集群也就不能
+操作了。
+ 
+*mongos实例会从config server缓存元数据* ，因此，如果server 的所有成员都不能访问了，只要你不在config
+server还不能重新使用(即复制集各个成员还没有成功启动)之后就重启mongos，你就可以使用cluster。但是
+如果你在config server可用之前重启mongos实例，mongos将不能路由读写操作。
+
+如果没有集群的元数据，cluster就不能被操作。为了确保config serve保持可用和完整， *configserver的
+备份是很重要的* 。 config Server上的数据相比集群上的数据是很小的，相对来说他属于低负载，不活跃的。
+
+** 数据分区
+MongoDB中数据的分片是以集合为基本单位的,集合中的数据通过片键(shard key)被分成多部分
+
+*** [[http://docs.mongoing.com/manual-zh/core/sharding-shard-key.html][片键]] 
+*为了在各个shards中共享一个collection* ，需要选择一个shard key，它存在于collection的每一个document中，
+既是一个索引字段，也是一个被索引的复合字段(一个collection中_id是默认的一个索引，其他的字段你可一个根据
+数据的特点来建立索引，主要要考虑数据可以被分散存到各个shards中，同时读操作可以被路由到某一个shards上)。
+mongodb将shard key的值划分在chunks上，并在shards之间均匀的分散chunks。为了划分shard key 值到chunks上,
+mongodb 使用了range based partitioning 和 hash based partitioning.
+
+也就是片键决定了集群中一个集合的 documents 在不同 shards 中的分布.片键字段必须被索引,且在集合中的每条
+记录都不能为空,可以是单个字段或复合字段. 
+
+**** range-based shard key
+MongoDB使用片键的范围把数据分布在分片中,每个范围,又称为数据块(chunk),定义了一个不重叠的片键范围, MongoDB
+把数据块与他们存储的文档分布到集群中的不同分片中.
+
+[[../../images/blog/mongodb_sharding/sharding-range-based.png]]
+
+上图是collection x的片键，当一个数据块的大小超过 [[http://docs.mongoing.com/manual-zh/core/sharding-chunk-splitting.html#sharding-chunk-size][数据块最大大小]] 时,MongoDB会依据片键的范围将数据
+块 [[http://docs.mongoing.com/manual-zh/reference/glossary.html#term-split][分裂为]] 更小的数据块. 默认的数据库chunk大小是64M。
+
+对于 基于范围的分片 ,MongoDB按照片键的范围把数据分成不同部分.假设有一个数字的片键:想象一个从负无
+穷到正无穷的直线,每一个片键的值都在直线上画了一个点.MongoDB把这条直线划分为更短的不重叠的片段,并
+称之为 数据块 ,每个数据块包含了片键在一定范围内的数据.
+
+在使用片键做范围划分的系统中,拥有”相近”片键的文档很可能存储在同一个数据块中,因此也会存储在同一个
+分片中.
+
+**** hash-based shard key
+哈希片键使用单字段上的 哈希索引 进行数据在分片之间的分发.
+
+**** 基于范围的分片方式与基于哈希的分片方式性能对比
+基于范围的分片方式提供了更高效的范围查询,给定一个片键的范围,分发路由可以很简单地确定哪个数据块存
+储了请求需要的数据,并将请求转发到相应的分片中.
+
+不过,基于范围的分片会导致数据在不同分片上的不均衡,有时候,带来的消极作用会大于查询性能的积极作用.
+比如,如果片键所在的字段是线性增长的,一定时间内的所有请求都会落到某个固定的数据块中,最终导致分布
+在同一个分片中.在这种情况下,一小部分分片承载了集群大部分的数据,系统并不能很好地进行扩展.
+
+与此相比,基于哈希的分片方式以范围查询性能的损失为代价,保证了集群中数据的均衡.哈希值的随机性使数
+据随机分布在每个数据块中,因此也随机分布在不同分片中.但是也正由于随机性,一个范围查询很难确定应该
+请求哪些分片,通常为了返回需要的结果,需要请求所有分片.
+
+[[../../images/blog/mongodb_sharding/sharding-hash-based.png]]
+
+被选为片键的字段必须有足够大的基数,或者足够多的不同的值,对于单调递增的字段,如 ObjectId 或者时间戳,
+哈希索引效果更好.
+
+如果在一个空的集合创建哈希片键,MongoDB会自动创建并迁移数据块,以保证每个分片上都有两个数据块,你可以
+在执行 shardCollection 指定 numInitialChunks 参数以控制初始化时MongoDB创建的数据块数目,或者手动调用
+ split 命令在分片上分裂数据块.
+
+要在集合上使用哈希片键,参见 使用哈希片键对集合分片 .
+
+**** 片键对集群操作的影响
+片键可以影响数据在分片间的分布,也影响 mongos 对集群直接操作的效率,因此可以影响集群的读写性能, 可以
+考虑以下的操作受片键的影响.
+****** 写扩展
+一些片键会使应用程序能够达到集群能够提供的最大的写性能,有一些则不能,比如使用默认的 _id 做片键的情况.
+
+在插入文档时,MongoDB会生成一个全局唯一的 ObjectId 标识符_id,不过,需要注意的一点是, 这个标识符的前几
+位代表时间戳,这意味着_id是以常规的并且可预测的方式增长,即使_id有大的基数(mongodb所说的基数能力指系
+统将数据分裂成chunks的能力,举个例子，如果你使用性别作为片键，那么你的基数就只有2个，这样大量的数据就会
+分布在这两个chunk里面，如果你选择身份证作为片键，那么你的基数就会很大，分裂能力也就很强。),在使用
+_id或者任意其他单调递增的数据作为片键时,所有的写入操作都会集中到一个分片中。 *这样数据就会集中在单个
+shard上，而不能分散开了*
+
+不过,如果你的写入频率很低或者大多都是update()操作,单调递增的片键不会对性能有很大影响,一般来说,选择的
+片键要 *同时* 具有 *较大的基数(分裂能力强,就像用身份证号码作为片键一样)* 与 *将请求分布在整个集群中
+(虽然前面片键的选择有较大的基数，但是可能有的身份证代表的人数据量很大，有的根本就没有数据，这样数据依然不能分散开)* 两个特性.
+
+通常,一个经过计算的片键会有一定的”随机性”,比如一个包含了其他字段加密哈希(例如 MD5或者SHA1)的片键,
+会使集群具有较好的写扩展性能.不过,随机的片键通常不会提供 查询隔离 的特性,而查询隔离同样是片键一个
+很重要的特性.
+
+****** 查询
+mongos给applications提供了一个接口和sharded cluster进行交互，但是隐藏了负载的数据分区过程。mongos接受
+applications的查询，然后使用config server的元数据来将这些请求通过适当的数据路由到mongod实例。mongos
+在分片环境中成功查询，这样你选择的分片就会对查询性能有很大的影响。 查询路由参见 [[http://docs.mongoing.com/manual-zh/core/sharded-cluster-query-router.html][集群的查询路由分发.]]
+
+** 数据均衡的维护
+也就是要尽量的是各个shard上的数据量保持均衡。
+
+新数据的加入或者新分片的加入可能会导致集群中数据的不均衡,即表现为有些分片保存的数据块数目显
+著地大于其他分片保存的数据块数.
+
+MongoBD使用两个过程维护集群中数据的均衡:分裂和均衡器.
+
+**** 分裂splitting
+分裂是一个后台进程，用于防止chunks不会增长太大。
+
+[[../../images/blog/mongodb_sharding/sharding-splitting.png]]
+
+当一个chunk增长超过了 [[http://docs.mongoing.com/manual-zh/core/sharding-chunk-splitting.html#sharding-chunk-size][specified chunk size]] ,mongodb 会将chunk分裂一半。 insert 和 update 会触发分裂。
+分裂是一个有效的meta-data改变的方法。 为了create splits， mongodb不会迁移任何数据影响shards。
+
+**** 均衡 balancer
+balancer是一个后台进程，用来管理chunk的迁移。balancer可以在集群的任何一个mongs上运行。
+
+当集群中数据的不均衡发生时,均衡器会将数据块从数据块数目最多的分片迁移到数据块最少的分片上,举例来讲:
+如果集合 users 在 分片1 上有100个数据块,在 分片2 上有50个数据块,均衡器会将数据块从 分片1 一直向 分
+片2 迁移,一直到数据均衡为止.
+
+shards管理chunk在源shard和目的shard的迁移。在chunk迁移期间，源shard当前的chunk的当前所有document都被发送到
+目标shard。然后，目标shard
+
+
+** 集群所需的条件
+在某些情况下,使用分片是 唯一 的解决办法,在以下情况下使用 集群 :
+| 你的数据接近或者超过一个MongoDB实例所能容纳的上限.                  |
+| 系统中 working set(经常使用的数据) 的大小接近系统的内存上限 .       |
+| 单一的MongoDB实例不能满足写性能要求,并且所有其他方法都没有明显作用. |
+如果这些特性在你的系统中都没有出现,使用分片只会增加系统的复杂程度,而不会带来什么好处.
+
+部署集群会花费时间和资源,如果你的系统已经或即将达到性能极限,很难在不影响使用的情况下部署集群.
+
+因此,如果你觉得你的数据库在未来需要分片, *不要等到系统负载超限之后* 才开始操作.
+
+对数据量的要求：
+
+只有在你的集群拥有大量数据时,分片才会显示出性能上的优势.默认的 chunk 大小是64M,而且在数据的不均衡
+程度达到[[http://docs.mongoing.com/manual-zh/core/sharding-balancing.html#sharding-migration-thresholds][迁移阈值 ]]之前, 均衡器 并不会工作.实际上,除非你的集群有几百M的数据,否则你的数据将会存储在
+一个分片上.
+
+在某些情况下,你也许需要对一个小的集合开启分片,但在大多数情况下,对小的集合开启分片,带来的复杂程度和
+开销会使得这种行为得不偿失,除非你想要获得更高的写性能.一般情况下,如果你的数据量较小,一个合理配置的
+单个MongoDB或者一个复制集在很长时间内都已经足够.
+
+** 生产环境的集群体系结构
+| config server:可为复制集，运行WiredTiger，cluster独有 |
+| shards超过两个                                        |
+| 一个或多个mongos,前面可能会加上负载均衡器             |
+
+** 集群的高可用性
+*** 如果应用服务器或者 mongos 不可用
+如果application server上有自己的mongos，而这台运用服务器或者mongos不可用，那么其他的运用服务器可以继续操作
+数据库。
+
+此外，mongos实例不会维持永久状态，他可以在不丢失任何状态或者数据的情况下重启或者变为不可用。当一个mongos实
+例启动，他会取回config database的一个副本，并可以路由查询操作。
+
+*** 如果一个分片中的一个 mongod 不可用
+复制集为shards提供了高可用性。 *如果不可用的mongod是primary* ，那么复制集会选出一个新的primary. *如果不可用
+的是secondary，他就会断开和primary的连接，secondary会继续维持所有的数据.* 在三个成员的复制集中，即使set里面
+的一个成员遭受灾难性的失败，另外两个也有数据的完整拷贝。 
+
+如果一个不可用的secondary变为可用了，而且他还依旧有当前的oplog入口，他就回使用 [[http://docs.mongoing.com/manual-zh/reference/glossary.html#term-sync][replication process]] 赶上最新的
+状态，否则，它必须执行一个 [[http://docs.mongoing.com/manual-zh/reference/glossary.html#term-initial-sync][initial sync]](即从set的已有成员中同步数据).
+
+*** 如果shard的所有成员都不可用
+这个shard上的数据将不能用，其他shard上的数据依然可以用，也可以从其他shards上进行读写。但你必须尽快恢复这个shard。
+
+*** 如果config server复制集的成员不可用
+如果config server上 *不可用的是primary* ,那么会重新选举处primary， *如果无法选举处primary* ，metadata会变为可读，
+你可以从shards上进行读写，但是chunk migration和chunk split就不会发生,除非primary重新可用。 *如果所有的config 
+databases* 都不可用，那集群也就不可操作了。
+
+*** 片键和集群可用性
+选择片键有下面这些重要考虑：
+| 确保mongodb能在shards间均匀的分散数据                       |
+| 有较好的写扩展性能                                          |
+| 确保mongos能分离大部分的查询到特定的mongod上,保证查询的效率 |
+
+** 部署shards cluster 
+*** shards的部署
+我们在vagrant上先布置了三个shards：
+| setName |        host | port                     |
+|---------+-------------+--------------------------|
+| rs0     | 10.47.33.20 | 27017,27018,27019        |
+| rs1     | 10.47.33.21 | 27017,27018,27019        |
+| rs2     | 10.47.33.22 | 27017,27018,27019,270120 |
+*** 部署config server 
+| setName |        host | port              |
+|---------+-------------+-------------------|
+| rc0     | 10.47.33.10 | 27017,27018,27019 |
+
+config server *需要dbpath* ，配置文件中同时加上：
+#+BEGIN_SRC
+replication:
+  replSetName: rc0
+sharding:
+  clusterRole: configsvr
+#+END_SRC
+使用mongod实例形式启动。
+
+*** 启动mongos
+mongos不是一个复制集，我们可以在我们applications中都启动mongos，比如emqttd所在的机器上。
+|        host |  port |
+| 10.47.33.11 | 27017 |
+ 
+mongos不需要dbpath，但是要指出config server，如果config server是单机就指定ip和port，如果是集群要
+指出复制集的名字和一个成员的ip和host。
+
+这里我们在mongos.conf中添加：
+#+BEGIN_SRC
+sharding:
+  configDB: rc0/10.47.33.10:27017,10.47.33.10:27018,10.47.33.10:27019
+#+END_SRC
+
+*** 向集群中添加分片
+到此为止shards都是分离的，还没有成为集群的一部分。
+
+集群一旦建立之后，后面的很多操作都是在mongos中进行的。
+
+通过mongo --host 10.47.33.11 --port 27017登陆到mongos，添加分片（必须加上复制集的名字和其中一个成员）：
+#+BEGIN_SRC
+mongos> sh.addShard("rs0/10.47.33.20:27017")
+{ "shardAdded" : "rs0", "ok" : 1 }
+#+END_SRC
+
+*** 为集群开启分片
+在对集合进行分片之前,必须开启数据库的分片.对数据库开启分片不会导致数据的重新分配,但这是对这个数据库中集合进行分片的前提.
+
+一旦为数据库开启了分片,MongoDB就会为这个数据库指定一个[[http://docs.mongoing.com/manual-zh/reference/glossary.html#term-primary-shard][primary shard]],所有未分片的数据都会存储在这个分片上.
+
+下面我们为数据库datapoints启动分片功能：
+#+BEGIN_SRC
+mongos> sh.enableSharding("datapoints")
+{ "ok" : 1 }
+#+END_SRC
+这时候，在mongos中的config数据库的databases集合中就会有相关的信息了：
+#+BEGIN_SRC
+mongos> use config
+switched to db config
+mongos> show collections
+changelog
+chunks
+databases
+lockpings
+locks
+mongos
+settings
+shards
+tags
+version
+mongos> db.databases.find()
+{ "_id" : "datapoints", "primary" : "rs0", "partitioned" : true }
+#+END_SRC
+关数据库datapoints的字段有 _id就是数据库名称，primary就是mongodb为这个数据库指定的primary shard，所有未
+分片的数据都会存在这个分片上。
+
+*** shard a Collection
+你可以选择把有的collection放在单个shard上，也可以放在各个shard上。如果你要把一个collection进行shard，你要做
+下面的工作：
+**** 首先选择一个 shard key ,所选择的片键会影响集群的效率.参见 选择片键的注意事项. 获得注意事项.
+**** 如果集合中已经包含有数据,需要使用 ensureIndex() 在片键上创建索引.如果集合是空的,MongoDB会在 sh.shardCollection() 过程中自动创建索引.
+**** Shard a collection by issuing the sh.shardCollection() method in the mongo shell. The method uses the following syntax:
+#+BEGIN_SRC
+sh.shardCollection("<database>.<collection>", shard-key-pattern)
+#+END_SRC
+
+将 <database>.<collection> 字符串换成你数据库的ns,由数据库的全名,一个点(即 . ),和集合的全名组成, 
+shard-key-pattern 换成你的片键,名字为 创建索引 时指定的名字.
+示例
+The following sequence of commands shards four collections:
+#+BEGIN_SRC
+sh.shardCollection("records.people", { "zipcode": 1, "name": 1 } )
+sh.shardCollection("people.addresses", { "state": 1, "_id": 1 } )
+sh.shardCollection("assets.chairs", { "type": 1, "_id": 1 } )
+sh.shardCollection("events.alerts", { "_id": "hashed" } )
+#+END_SRC
+
+按照顺序操作分片:
+***** records 数据库中的 people 集合使用 { "zipcode": 1, "name": 1 } 片键开启分片.
+这个集合使用 zipcode 字段重新分配数据.如果很多文档都有相同的 zipcode 值, chunk 会按照 name 的值进行 分裂.
+***** people 数据库中的 addresses 集合使用片键 { "state": 1, "_id": 1 }.
+这个片键使用 state 字段重新分配数据.如果很多文档都有相同的 state 值, chunk 会按照 _id 的值进行 分裂.
+***** assets 数据库中的 chairs 集合使用 { "type": 1, "_id": 1 } 做片键.
+这个片键使用 type 字段重新分配数据.如果很多文档都有相同的 type 值, chunk 会按照 _id 的值进行 分裂.
+***** events 数据库中的 alerts 集合使用 { "_id": "hashed" } 做片键.
+This shard key distributes documents by a hash of the value of the _id field. MongoDB computes the hash of the _id field for the hashed index, which should provide an even distribution of documents across a cluster.
+
+
+
