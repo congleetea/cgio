@@ -1,0 +1,133 @@
+#+TITLE: 2016-07-04-EMQTTD_keepalive.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Monday, July  4 2016 
+#+OPTIONS: ^:nil
+
+最近发现mqtt客户端设置的keepalive为60s，但是断开之后要差不多3min才会消失断开。因此看看
+keepalive到底是怎么工作的。
+
+首先，客户端会在CONNECT包的可变报头中设置keepalive的时间(s).
+
+当emqttd_protocol中为这个client启动了session之后，会执行下面的函数，给自己发送一个启动
+keepalive的信息，接着在emqttd_client:handle_info中执行keepalive的启动。
+#+BEGIN_SRC
+emqttd_protocol.erl:
+
+start_keepalive(0) -> ignore;
+
+start_keepalive(Sec) when Sec > 0 ->
+    self() ! {keepalive, start, round(Sec * 1.25)}.
+#+END_SRC
+我们注意到传给启动函数的时间是客户端设置时间的1.25倍,假如client设置的是60s，那么传给启动
+函数的就是60*1.25=75s。
+#+BEGIN_SRC
+emqttd_client.erl:
+handle_info({keepalive, start, Interval}, State = #client_state{connection = Connection}) ->
+    ?LOG(debug, "Keepalive at the interval of ~p", [Interval], State),
+    StatFun = fun() ->
+                case Connection:getstat([recv_oct]) of
+                    {ok, [{recv_oct, RecvOct}]} -> {ok, RecvOct};
+                    {error, Error}              -> {error, Error}
+                end
+             end,
+    KeepAlive = emqttd_keepalive:start(StatFun, Interval, {keepalive, check}),
+    hibernate(State#client_state{keepalive = KeepAlive});
+#+END_SRC
+在emqttd_client的启动函数中，首先定义StatFun函数，这个函数通过获取socket的流通消息byte数变化
+来判断客户端和服务器的socket通道是否还有数据的交流。keepalive相关信息使用一个记录#keepalive来
+保存, 其中statfun就是前面的StatFun函数;statval就是执行StatFun得到的值(这个值会被保留用以和下
+次获取的值进行比较);tsec就是前面的Sec*1.25时间(用来做后面的定时器);tmsg就是前面的时间超时之后
+会发送的消息(就是check的指令);tref是start keepalive的之时候设置的一个定时器;repeat设置check几
+次之后认为客户端和服务器断开。
+#+BEGIN_SRC
+-record(keepalive, {statfun, statval,
+                    tsec, tmsg, tref,
+                    repeat = 0}).
+
+-type keepalive() :: #keepalive{}.
+
+%% @doc Start a keepalive
+-spec(start(fun(), integer(), any()) -> undefined | keepalive()).
+start(_, 0, _) ->
+    undefined;
+start(StatFun, TimeoutSec, TimeoutMsg) ->
+    {ok, StatVal} = StatFun(),
+    #keepalive{statfun = StatFun, statval = StatVal,
+               tsec = TimeoutSec, tmsg = TimeoutMsg,
+               tref = timer(TimeoutSec, TimeoutMsg)}.
+#+END_SRC
+这样每个客户端设置的keepalive的1.25倍时间，服务器就会执行一次check，看看socket的流通消息byte数。
+每隔1.25倍时间执行的check如下,check会返回三种状态，一种是正常连接状态，一种是超时断开状态，还有
+一种是连接错误导致断开的状态，客户端直接关闭就会导致这种状态，这是因为socket已经被断开了。在执行
+StatFun函数的时候就已经检查socket错误了。
+#+BEGIN_SRC
+emqttd_client.erl:
+handle_info({keepalive, check}, State = #client_state{keepalive = KeepAlive}) ->
+    case emqttd_keepalive:check(KeepAlive) of
+        {ok, KeepAlive1} ->
+            hibernate(State#client_state{keepalive = KeepAlive1});
+        {error, timeout} ->
+            ?LOG(debug, "Keepalive timeout", [], State),
+            shutdown(keepalive_timeout, State);
+        {error, Error} ->
+            ?LOG(warning, "Keepalive error - ~p", [Error], State),
+            shutdown(Error, State)
+    end;
+
+emqttd_keepalive.erl:
+%% @doc Check keepalive, called when timeout.
+-spec(check(keepalive()) -> {ok, keepalive()} | {error, any()}).
+check(KeepAlive = #keepalive{statfun = StatFun, statval = LastVal, repeat = Repeat}) ->
+    case StatFun() of
+        {ok, NewVal} ->
+            if NewVal =/= LastVal ->
+                    {ok, resume(KeepAlive#keepalive{statval = NewVal, repeat = 0})};
+                Repeat < 1 ->
+                    {ok, resume(KeepAlive#keepalive{statval = NewVal, repeat = Repeat + 1})};
+                true ->
+                    {error, timeout}
+            end;
+        {error, Error} ->
+            {error, Error}
+    end.
+
+resume(KeepAlive = #keepalive{tsec = TimeoutSec, tmsg = TimeoutMsg}) ->
+    KeepAlive#keepalive{tref = timer(TimeoutSec, TimeoutMsg)}.
+#+END_SRC
+获取socket的流通消息byte数之后和上次的进行比较，如果和上次不一样，那就说明服务器和客户端还有
+信息交流，这时候就重新设置keepalive，在1.25倍时间之后再次check。
+
+如果和上次byte数量是一样的，那就说明在这段时间内客户端和服务器没有任何信息交流，那就判断repeat
+的值，如果repeat<1，就将repeat增1之后重新在1.25倍时间后check, 这样客户端和服务器没有交流之后到
+服务判断断开的时间可能就是60s+75+75=3.5min.
+
+下面是一个客户端设置keepalive=60s的跟踪：
+#+BEGIN_SRC
+14:53:47.977 [error] 
+emqttd_keepalive:33:Start KeepAlive.     %% 53:47启动keepalive.
+14:54:47.972 [error] 
+emqttd_protocol:111:Type=12              %% 启动60s之后发送一个PING包 
+14:55:02.978 [error] 
+emqttd_keepalive:42:Check KeepAlive.     %% 启动75s之后check一次 
+14:55:47.972 [error] 
+emqttd_protocol:111:Type=12              %% 每隔60s发送一个PING包
+14:55:47.973 [error] 
+emqttd_protocol:111:Type=12
+14:56:17.979 [error] 
+emqttd_keepalive:42:Check KeepAlive.     %% 距离上次check之后75s再次check。
+14:56:47.973 [error] 
+emqttd_protocol:111:Type=12
+14:56:47.973 [error] 
+emqttd_protocol:111:Type=12
+14:57:32.980 [error] 
+emqttd_keepalive:42:Check KeepAlive.
+#+END_SRC
+我们注释掉判断repeat那部分代码,这样时间会缩短。
+
+
+
+
+* 总结
+从上面的分析来看，PING包的作用其实就是定时发送包,为了在在客户端和服务器没有其他交互的时候，socket
+的流量有改变。
