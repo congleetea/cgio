@@ -34,9 +34,9 @@ handle_info({keepalive, start, Interval}, State = #client_state{connection = Con
     KeepAlive = emqttd_keepalive:start(StatFun, Interval, {keepalive, check}),
     hibernate(State#client_state{keepalive = KeepAlive});
 #+END_SRC
-在emqttd_client的启动函数中，首先定义StatFun函数，这个函数通过获取socket的流通消息byte数变化
-来判断客户端和服务器的socket通道是否还有数据的交流。keepalive相关信息使用一个记录#keepalive来
-保存, 其中statfun就是前面的StatFun函数;statval就是执行StatFun得到的值(这个值会被保留用以和下
+在emqttd_client的启动函数中，首先定义StatFun函数，这个函数通过获取socket *接收到的* 消息byte
+数变化来判断客户端和服务器的socket通道是否还有数据的交流。keepalive相关信息使用一个记录#keepalive
+来保存, 其中statfun就是前面的StatFun函数;statval就是执行StatFun得到的值(这个值会被保留用以和下
 次获取的值进行比较);tsec就是前面的Sec*1.25时间(用来做后面的定时器);tmsg就是前面的时间超时之后
 会发送的消息(就是check的指令);tref是start keepalive的之时候设置的一个定时器;repeat设置check几
 次之后认为客户端和服务器断开。
@@ -57,10 +57,10 @@ start(StatFun, TimeoutSec, TimeoutMsg) ->
                tsec = TimeoutSec, tmsg = TimeoutMsg,
                tref = timer(TimeoutSec, TimeoutMsg)}.
 #+END_SRC
-这样每个客户端设置的keepalive的1.25倍时间，服务器就会执行一次check，看看socket的流通消息byte数。
-每隔1.25倍时间执行的check如下,check会返回三种状态，一种是正常连接状态，一种是超时断开状态，还有
-一种是连接错误导致断开的状态，客户端直接关闭就会导致这种状态，这是因为socket已经被断开了。在执行
-StatFun函数的时候就已经检查socket错误了。
+这样每个客户端设置的keepalive的1.25倍时间，服务器就会执行一次check，看看socket的接受客户端消息
+byte数。每隔1.25倍时间执行的check如下,check会返回三种状态，一种是正常连接状态，一种是超时断开状
+态，还有一种是连接错误导致断开的状态，客户端直接关闭就会导致这种状态，这是因为socket已经被断开了。
+在执行StatFun函数的时候就已经检查socket错误了。
 #+BEGIN_SRC
 emqttd_client.erl:
 handle_info({keepalive, check}, State = #client_state{keepalive = KeepAlive}) ->
@@ -100,18 +100,18 @@ resume(KeepAlive = #keepalive{tsec = TimeoutSec, tmsg = TimeoutMsg}) ->
 
 如果和上次byte数量是一样的，那就说明在这段时间内客户端和服务器没有任何信息交流，那就判断repeat
 的值，如果repeat<1，就将repeat增1之后重新在1.25倍时间后check, 这样客户端和服务器没有交流之后到
-服务判断断开的时间可能就是60s+75+75=3.5min.
+服务判断断开的时间可能就是(0~75)s+75+75=2min30s~3min45s.
 
 下面是一个客户端设置keepalive=60s的跟踪：
 #+BEGIN_SRC
 14:53:47.977 [error] 
 emqttd_keepalive:33:Start KeepAlive.     %% 53:47启动keepalive.
 14:54:47.972 [error] 
-emqttd_protocol:111:Type=12              %% 启动60s之后发送一个PING包 
+emqttd_protocol:111:Type=12              %% 启动60s之后收到客户端发送一个PINGREQ包 
 14:55:02.978 [error] 
 emqttd_keepalive:42:Check KeepAlive.     %% 启动75s之后check一次 
 14:55:47.972 [error] 
-emqttd_protocol:111:Type=12              %% 每隔60s发送一个PING包
+emqttd_protocol:111:Type=12              %% 客户端每隔60s发送一个PING包
 14:55:47.973 [error] 
 emqttd_protocol:111:Type=12
 14:56:17.979 [error] 
@@ -129,5 +129,26 @@ emqttd_keepalive:42:Check KeepAlive.
 
 
 * 总结
+** PING包的作用 
 从上面的分析来看，PING包的作用其实就是定时发送包,为了在在客户端和服务器没有其他交互的时候，socket
 的流量有改变。
+
+** 设备断线之后到底要多久才会提示离线
+-----最后一个PING包前的最后一次check1(75s之后再次check)
+-----PING包(这个包发送的时间决定最后确定的时间，如果上次check之后立刻发出，那么确定的时间就很长;如果在下次check之前发出那就最少)
+75s 
+-----check (socket的流量较上一次有变化，认为没有掉线)
+75s (这期间不会发送任何包了)
+-----check (socket的流量没有变化了，有可能已经掉线，repeat一次)
+75s (这期间没有相同的clientid连接) 
+-----check (还是没有任何消息，最后确认离线)
+(0~75)+75*2 = 2min30s~3min45s
+
+** 如果没有repeat过程
+-----最后一个PING包前的最后一次check1(75s之后再次check)
+-----PING包(这个包发送的时间决定最后确定的时间，如果上次check之后立刻发出，那么确定的时间就很长;如果在下次check之前发出那就最少)
+75s 
+-----check (socket的流量较上一次有变化，认为没有掉线)
+75s (这期间不会发送任何包了)
+-----check (还是没有任何消息，最后确认离线)
+(0~75)+75=1min15s～2min30.
