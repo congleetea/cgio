@@ -1,0 +1,363 @@
+#+TITLE: 2016-07-08-EMQTTD_session.org
+#+AUTHOR: Xuancong Lee
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Friday, July  8 2016
+#+OPTIONS: ^:nil
+
+
+session是client在mqtt服务器上位置的一个状态。本节我们详细看看emqttd是如何处理session的。
+
+* session的建立
+** 总括
+客户端连接平台会带上clientid，(mqtt3.1.1允许不带clientid连接，由平台产生clientid, 总之，
+我们有了一个clientid了), 首先要经过服务器端的认证，认证成功之后才有权继续下面的事情。接
+下来就是带上CleanSess标志和clientid进行start_session的过程：
+*emqttd_sm.erl*
+#+BEGIN_SRC
+%% Persistent Session
+handle_call({start_session, Client = {false, ClientId, ClientPid}}, _From, State) ->
+    case lookup_session(ClientId) of
+        undefined ->
+            %% Create session locally
+            create_session(Client, State);
+        Session ->
+            case resume_session(Session, ClientPid) of
+                {ok, SessPid} ->
+                    {reply, {ok, SessPid, true}, State};
+                {error, Erorr} ->
+                    {reply, {error, Erorr}, State}
+             end
+    end;
+%% Transient Session
+handle_call({start_session, Client = {true, ClientId, _ClientPid}}, _From, State) ->
+    case lookup_session(ClientId) of
+        undefined ->
+            create_session(Client, State);
+        Session ->
+            case destroy_session(Session) of
+                ok ->
+                    create_session(Client, State);
+                {error, Error} ->
+                    {reply, {error, Error}, State}
+            end
+    end;
+#+END_SRC
+启动永久session和暂态session有一些区别，主要的过程是首先到数据库(什么数据库?是否是注册clientid的数据库)
+查询这个ClientId如果没有这个ClientId不存在，那就创建session。如果已经存在这个session，那就分永久session
+和暂态session两种情况了，对于永久session只需要重用这个已经存在的session就可以了；对于暂态的session，首
+先要销毁已有的session，再重新创建session。
+
+下面从以下几方面详细解读：
+| 查询session时如何考虑跨节点的问题?                                        |
+| 如何创建session?                                                          |
+| 这里创建的session和session模块中的那些session有什么关系，比如消息队列等等 |
+| 如果更新一个节点，上面的session(包含消息队列)是不是就不在了?              |
+目前我们可以推测session的创建，销毁和重用应该都是对同一个数据库进行处理。
+
+* lookup_session
+下面是查询session的过程，session也是使用clientid来唯一标志的。
+#+BEGIN_SRC
+%% @doc Lookup a Session
+-spec(lookup_session(binary()) -> mqtt_session() | undefined).
+lookup_session(ClientId) ->
+    case mnesia:dirty_read(session, ClientId) of
+        [Session] -> Session;
+        []        -> undefined
+    end.
+#+END_SRC
+显然，这里的session是保存在mnesia里面的,我们看看这个表的建立:
+#+BEGIN_SRC
+mnesia(boot) ->
+    %% Global Session Table
+    ok = emqttd_mnesia:create_table(session, [
+                {type, set},
+                {ram_copies, [node()]},
+                {record_name, mqtt_session},
+                {attributes, record_info(fields, mqtt_session)}]);
+#+END_SRC
+可见，这个表是 *ram_copies* 的， *在集群里面可以在其他节点操作这个表* 。
+mqtt_session的记录结构如下：
+#+BEGIN_SRC
+-record(mqtt_session, {
+    client_id   :: binary(),
+    sess_pid    :: pid(),
+    persistent  :: boolean()
+}).
+-type mqtt_session() :: #mqtt_session{}.
+#+END_SRC
+
+** create_session
+创建session有两个步骤：创立和监控。
+创建session只在下面的情况下进行：
+| 暂态session每次连接平台都要创建           |
+| 永久session首次连接平台(集群平台的还没有过期) |
+
+#+BEGIN_SRC
+%% Create Session Locally
+create_session({CleanSess, ClientId, ClientPid}, State) ->
+    case create_session(CleanSess, ClientId, ClientPid) of
+        {ok, SessPid} ->
+            {reply, {ok, SessPid, false},
+                monitor_session(ClientId, SessPid, State)};
+        {error, Error} ->
+            {reply, {error, Error}, State}
+    end.
+create_session(CleanSess, ClientId, ClientPid) ->
+    case emqttd_session_sup:start_session(CleanSess, ClientId, ClientPid) of   %% ************
+        {ok, SessPid} ->
+            Session = #mqtt_session{client_id  = ClientId,
+                                    sess_pid   = SessPid,
+                                    persistent = not CleanSess},
+            case insert_session(Session) of
+                {aborted, {conflict, ConflictPid}} ->
+                    %% Conflict with othe node?
+                    lager:error("SM(~s): Conflict with ~p", [ClientId, ConflictPid]),
+                    {error, mnesia_conflict};
+                {atomic, ok} ->
+                    {ok, SessPid}
+            end;
+        {error, Error} ->
+            {error, Error}
+    end.
+#+END_SRC
+*** create
+在emqttd_session_sup:start_session中最后使用supervisor:start_child,在启动策略中指定了
+emqttd_session:start_link来启动，接着执行init回调：
+#+BEGIN_SRC
+init([CleanSess, ClientId, ClientPid]) ->
+    process_flag(trap_exit, true),
+    true    = link(ClientPid),
+    QEnv    = emqttd:env(mqtt, queue),
+    SessEnv = emqttd:env(mqtt, session),
+    Session = #session{
+            clean_sess        = CleanSess,
+            client_id         = ClientId,
+            client_pid        = ClientPid,
+            subscriptions     = dict:new(),
+            inflight_queue    = [],
+            max_inflight      = get_value(max_inflight, SessEnv, 0),
+            message_queue     = emqttd_mqueue:new(ClientId, QEnv, emqttd_alarm:alarm_fun()),
+            awaiting_rel      = #{},
+            awaiting_ack      = #{},
+            awaiting_comp     = #{},
+            retry_interval    = get_value(unack_retry_interval, SessEnv),
+            await_rel_timeout = get_value(await_rel_timeout, SessEnv),
+            max_awaiting_rel  = get_value(max_awaiting_rel, SessEnv),
+            expired_after     = get_value(expired_after, SessEnv) * 60,
+            collect_interval  = get_value(collect_interval, SessEnv, 0),
+            timestamp         = os:timestamp()},
+    emqttd_sm:register_session(CleanSess, ClientId, sess_info(Session)),
+    %% start statistics
+    {ok, start_collector(Session), hibernate}.
+#+END_SRC
+在init回调函数中，读取了配置中对session的设置，定义#session记录，里面定义了发布和订阅响应超时的
+定时器和保存离线消息和飞行消息的队列。最后调用emqttd_sm:register_session:
+#+BEGIN_SRC
+%% @doc Register a session with info.
+-spec(register_session(CleanSess, ClientId, Info) -> ok when
+      CleanSess :: boolean(),
+      ClientId  :: binary(),
+      Info      :: [tuple()]).
+register_session(CleanSess, ClientId, Info) ->
+    ets:insert(sesstab(CleanSess), {{ClientId, self()}, Info}).
+
+sesstab(true)  -> mqtt_transient_session;
+sesstab(false) -> mqtt_persistent_session.
+#+END_SRC
+可以看出注册永久和暂态session是放在ets表中的mqtt_transient_session和mqtt_persistent_session, 表
+里面的内容有三部分：ClientId，session的进程Pid，Info。这个info里保留的是session的一些基本信息，
+而真正的数据是放在这个进程中的。
+
+*注意，clientid和sesion的注册都是放在ets中的，为什么要放在这里呢？因为clientid和session都是客户端断开之后就消失的，因此放在ets中，如果emqttd重启，这时候这些信息也就消失了。但是session信息却是放在mnesia中的，虽然放在mnesia中，但是它是ram_copies类型的，同样也会消失.* 
+
+#+BEGIN_SRC
+sess_info(#session{clean_sess      = CleanSess,
+                   inflight_queue  = InflightQueue,
+                   max_inflight    = MaxInflight,
+                   message_queue   = MessageQueue,
+                   awaiting_rel    = AwaitingRel,
+                   awaiting_ack    = AwaitingAck,
+                   awaiting_comp   = AwaitingComp,
+                   timestamp       = CreatedAt}) ->
+    Stats = emqttd_mqueue:stats(MessageQueue),
+    [{clean_sess,     CleanSess},
+     {max_inflight,   MaxInflight},
+     {inflight_queue, length(InflightQueue)},
+     {message_queue,  get_value(len, Stats)},
+     {message_dropped,get_value(dropped, Stats)},
+     {awaiting_rel,   maps:size(AwaitingRel)},
+     {awaiting_ack,   maps:size(AwaitingAck)},
+     {awaiting_comp,  maps:size(AwaitingComp)},
+     {created_at,     CreatedAt}].
+#+END_SRC
+到此session就启动并注册在ets中了，接下来insert_session:
+#+BEGIN_SRC
+insert_session(Session = #mqtt_session{client_id = ClientId}) ->
+    mnesia:transaction(
+      fun() ->
+        case mnesia:wread({session, ClientId}) of
+            [] ->
+                mnesia:write(session, Session, write);
+            [#mqtt_session{sess_pid = SessPid}] ->
+                mnesia:abort({conflict, SessPid})
+        end
+      end).
+#+END_SRC
+这里的mnesia:wread({session, ClientId})其实执行的是mnesia:read({Tab, Key, write})表示读取并上write
+锁。如果没有mnesia中没有这个session就将#mqtt_session写入，如果有冲突就提示错误,建立失败。
+
+注意，对于永久session，mnesia中的信息必然是冲突的，为什么不报错呢？前面已经讲了，对于永久session不会
+建立session，而是重用，因此也就不会使用这个函数，也就不会报错了.
+
+到此为止，session的建立和注册都完成了， 下面就是监控。
+
+*** monitor
+我们看看监控代码：
+#+BEGIN_SRC
+monitor_session(ClientId, SessPid, State = #state{monitors = Monitors}) ->
+    MRef = erlang:monitor(process, SessPid),
+    State#state{monitors = dict:store(MRef, ClientId, Monitors)}.
+#+END_SRC
+使用monitor函数进行监控，这样当这个SessPid崩溃之后，这个gen_server会收到崩溃消息。
+
+** destroy
+由于在这个emqttd的集群里面不允许节点之间存在相同的session，因此当建立暂态session的时候
+要销毁已有的session，有可能session就在不同的节点。
+#+BEGIN_SRC
+%% Local node
+destroy_session(Session = #mqtt_session{client_id = ClientId, sess_pid  = SessPid})
+    when node(SessPid) =:= node() ->
+    emqttd_session:destroy(SessPid, ClientId), %% 清除进程PId, 包括ets中的消息
+    remove_session(Session);                   %% 清除mnesia中保留的消息
+
+%% Remote node
+destroy_session(Session = #mqtt_session{client_id = ClientId,
+                                        sess_pid  = SessPid}) ->
+    Node = node(SessPid),                                             %% erlang:node(SessPid)会返回创建SessPid进程的节点.
+    case rpc:call(Node, emqttd_session, destroy, [SessPid, ClientId]) of
+        ok ->
+            remove_session(Session); 
+        {badrpc, nodedown} ->
+            ?LOG(error, "Node '~s' down", [Node], Session),
+
+        {badrpc, Reason} ->
+            ?LOG(error, "Failed to destory ~p on remote node ~p for ~s",
+                 [SessPid, Node, Reason], Session),
+            {error, Reason}
+     end.
+#+END_SRC
+这里有两部分，一部分是销毁进程Pid，这个直接调用shutdown函数完成；另一部分是清除mnesia中保留
+的session信息。
+
+对于在远端节点上的sesion， 首先使用rpc:call远程调用destroy销毁远端的SessPid，然后在本地节点执行清除mnesia中的session
+步骤，而不需要在远端节点上进行清除，因为mnesia会进行同步的,远端的自然会被清除。如果远端建立sessPid的那个节点已经down
+了，那么清除mnesia中的内容(当然ets中的注册信息也会随着SessPid的死亡而被清除)。
+ 
+** resume session
+对于永久的Session，如果平台已经有session， 就会重用这个session:
+#+BEGIN_SRC
+%% Local node
+resume_session(Session = #mqtt_session{client_id = ClientId,
+                                       sess_pid  = SessPid}, ClientPid)
+    when node(SessPid) =:= node() ->
+
+    case is_process_alive(SessPid) of
+        true ->
+            emqttd_session:resume(SessPid, ClientId, ClientPid),
+            {ok, SessPid};
+        false ->
+            ?LOG(error, "Cannot resume ~p which seems already dead!", [SessPid], Session),
+            {error, session_died}
+    end;
+
+%% Remote node
+resume_session(Session = #mqtt_session{client_id = ClientId, sess_pid = SessPid}, ClientPid) ->
+    Node = node(SessPid),
+    case rpc:call(Node, emqttd_session, resume, [SessPid, ClientId, ClientPid]) of
+        ok ->
+            {ok, SessPid};
+        {badrpc, nodedown} ->
+            ?LOG(error, "Session died for node '~s' down", [Node], Session),
+            remove_session(Session),
+            {error, session_nodedown};
+        {badrpc, Reason} ->
+            ?LOG(error, "Failed to resume from node ~s for ~p", [Node, Reason], Session),
+            {error, Reason}
+    end.
+#+END_SRC
+如果是本地的session重用,首先判断这个SessPid是否还活着，如果活着调用emqttd_session:resume重用，
+如果是远端节点，那就通过rpc:call在远端执行重用，如果重用失败就要删除mnesia中的信息。
+
+重用调用了emqttd_session:resume执行，最终由handle_cast执行：
+#+BEGIN_SRC
+handle_cast({resume, ClientId, ClientPid}, Session = #session{client_id      = ClientId,
+                                                              client_pid     = OldClientPid,
+                                                              clean_sess     = CleanSess,
+                                                              inflight_queue = InflightQ,
+                                                              awaiting_ack   = AwaitingAck,
+                                                              awaiting_comp  = AwaitingComp,
+                                                              expired_timer  = ETimer} = Session) ->
+
+    ?LOG(info, "resumed by ~p", [ClientPid], Session),
+
+    %% Cancel expired timer
+    cancel_timer(ETimer),                                                           %% 1)取消上一次设置的session有效定时器
+
+    case kick(ClientId, OldClientPid, ClientPid) of                                 %% 2)发送消息，剔除旧的ClientPid进程
+        ok -> ?LOG(warning, "~p kickout ~p", [ClientPid, OldClientPid], Session);
+        ignore -> ok
+    end,
+
+    true = link(ClientPid),                                                         %% 3)和新的ClientPid建立link
+
+    %% Redeliver PUBREL
+    [ClientPid ! {redeliver, {?PUBREL, PktId}} || PktId <- maps:keys(AwaitingComp)],%% 4)重新投递PUBREL包
+
+    %% Clear awaiting_ack timers
+    [cancel_timer(TRef) || TRef <- maps:values(AwaitingAck)],                       %% 5)取消waitingack的定时器
+
+    %% Clear awaiting_comp timers
+    [cancel_timer(TRef) || TRef <- maps:values(AwaitingComp)],                      %% 6)取消awaitingcomp定时器
+
+    Session1 = Session#session{client_pid     = ClientPid,
+                               old_client_pid = OldClientPid,
+                               clean_sess     = false,
+                               awaiting_ack   = #{},
+                               awaiting_comp  = #{},
+                               expired_timer  = undefined},
+
+    %% CleanSess: true -> false?
+    if
+        CleanSess =:= true  ->
+            ?LOG(warning, "CleanSess changed to false.", [], Session),
+            emqttd_sm:unregister_session(CleanSess, ClientId),                      %% 7)注销session, 清除ets中的session信息
+            emqttd_sm:register_session(false, ClientId, sess_info(Session1));       %% 8)注册新的session
+        CleanSess =:= false ->
+            ok
+    end,
+
+    %% Redeliver inflight messages
+    Session2 =
+    lists:foldl(fun({_Id, Msg}, Sess) ->
+            redeliver(Msg, Sess)
+        end, Session1, lists:reverse(InflightQ)),                                   %% 8)重新投递飞行消息
+
+    %% Dequeue pending messages
+    hibernate(dequeue(Session2));                                                   %% 9)重新投递离线消息
+#+END_SRC
+
+给旧的ClientPid发送shutdown的信号，踢掉旧的ClientPid(相关clientid的信息也将从数据看删除)
+#+BEGIN_SRC
+%%--------------------------------------------------------------------
+%% Kick old client out
+%%--------------------------------------------------------------------
+kick(_ClientId, undefined, _Pid) ->
+    ignore;
+kick(_ClientId, Pid, Pid) ->
+    ignore;
+kick(ClientId, OldPid, Pid) ->
+    unlink(OldPid),
+    OldPid ! {shutdown, conflict, {ClientId, Pid}},
+    %% Clean noproc
+    receive {'EXIT', OldPid, _} -> ok after 0 -> ok end.
+#+END_SRC
