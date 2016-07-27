@@ -1,0 +1,389 @@
+#+TITLE: 2016-07-26-ITNET_SSL.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  congleetea@gmail.com
+#+DATE:  Tuesday, July 26 2016 
+#+OPTIONS: ^:nil
+
+* 为什么需要https(mqtts)
+  http和mqtt都是在tcp上的应用层协议。他们有一下的缺点：
+| 通信使用明文(不加密)，内容可能会被窃听.   |
+| 不能验证通信双方的身份，有可能遭遇伪装.   |
+| 不能保证报文的完整性，报文可能已经被篡改. |
+针对以上三个问题，我们通过加密报文，验证身份和报文完整性来解决，这也就是https(mqtts)了。
+
+** 加密报文
+加密有两种方式，一个是通信加密，一个是内容加密。前者是使用SSL/TLS建立安全的通信线路之后，在通过这个线路
+进行http通信。后者则是对通信的内容做加密处理，即传输之前对文件加密，然后把加密之后的文件发送出去，
+接收端收到文件之后在加密使用, 但是这种方法不像前者对整个通信线路进行加密处理，所有依然还有被窃取的风险。
+
+加密和解密使用同一个秘钥的方式叫做共享加密技术(对称加密技术)。这种方式有一个问题就是通信双方都得要有
+相同的秘钥，那如何安全的传递这个秘钥就是一个问题，有可能在传递的过程中已经被第三方窃取了，这样加密也就
+毫无意义了。
+
+另一种方式叫做公开秘钥加密技术(非对称加密技术)，即存在一个私有秘钥和一个公有秘钥，公有秘钥可以发布给任
+何人，但是私有秘钥则自己保管，持有公有秘钥者使用它对内容进行加密，持有私有秘钥者使用私钥对内容解密。这
+就避免了共享加密技术在传递秘钥的安全问题了。
+
+https(mqtts)并用了共享秘钥加密和公开秘钥加密技术的混合加密技术。交换秘钥环节使用公开加密技术，之后建立
+通信交换报文阶段使用共享加密技术。因为前者加密和解密使用的算法比较复杂，相较后者速度满了很多。
+
+** 验证通信双方的身份
+SSL/TLS通过握手实现双方身份的认证。这个在后面单双向认证中详细解释。
+
+** 报文的完整性
+虽然可以使用http来确定报文完整性的方法，但是并不可靠和便捷。其中常用的是使用MD5和SHA-1等散列值校验方法。
+以及用来确认文件的数字签名方法。 
+
+* SSL/TLS
+SSL安全证书包含:CA证书,服务器证书和客户端证书。
+
+这三个证书中，只有服务器证书是必需的。如果使用了CA证书，那么服务器证书和客户端证书都使用CA证书来签名。
+如果不使用CA证书，浏览器就会认为这个网站是不安全的。如果有客户端证书，那就是双向认证的HTTPS(MQTTS)，
+否则就是单向的。
+
+上面几种证书都可以自己生成。商业上，一般 *自己提供服务器或客户证书端的私钥和证书请求CSR* ，向第三方机
+构付费申请得到通过CA证书签名的服务器证书和客户证书。
+
+** 三种证书
+*** CA证书
+也叫根证书或中间级证书。单向认证的https，CA证书是可选的。主要目的是使证书构成一个证书链，以达到浏览器
+信任证书的目的。如果使用了CA证书，服务器证书和客户证书都使用CA证书来签名。如果不安装CA证书，浏览器默
+认是不安全的。
+
+*** 服务器证书 
+必选。通过服务器私钥，生成证书请求文件CSR，再通过CA证书签名生成服务器证书。   
+
+*** 客户端证书 
+可选。如果有客户证书，就是双向认证的HTTPS(MQTTS)，否则就是单向认证的HTTPS(MQTTS)。生成步骤和服务器证书
+类似。
+
+** 证书的生成
+根据前面的描述，证书的生成可以分为以下过程, 一般是有权威机构产生的，但是我们也可以使用一些工具自己生成，
+比如openssl，使用x509可以生成自认证证书：
+
+*** 创建一个自己的CA组织
+**** 第一步，产生一个CA的私钥
+#+BEGIN_SRC
+➜  ca git:(master) ✗ openssl genrsa -out ca.key -des3 1024
+Generating RSA private key, 1024 bit long modulus
+............++++++
+...................++++++
+unable to write 'random state'
+e is 65537 (0x10001)
+Enter pass phrase for ca.key:                ## 输入密码123456
+Verifying - Enter pass phrase for ca.key:    ## 确认密码123456
+➜  ca git:(master) ✗ ls
+ca.key
+#+END_SRC 
+   
+**** 第二步，创建CA的请求文件
+这一步利用CA的私钥，产生对应的CA请求文件。
+#+BEGIN_SRC
+➜  ca git:(master) ✗ openssl req -new -key ca.key -out ca.csr
+Enter pass phrase for ca.key:
+You are about to be asked to enter information that will be incorporated
+into your certificate request.
+What you are about to enter is what is called a Distinguished Name or a DN.
+There are quite a few fields but you can leave some blank
+For some fields there will be a default value,
+If you enter '.', the field will be left blank.
+-----
+Country Name (2 letter code) [AU]:cn
+State or Province Name (full name) [Some-State]:guangdong
+Locality Name (eg, city) []:shenzhen 
+Organization Name (eg, company) [Internet Widgits Pty Ltd]:iot
+Organizational Unit Name (eg, section) []:dev
+Common Name (e.g. server FQDN or YOUR name) []:localhost
+Email Address []:congleetea@ca.com        
+
+Please enter the following 'extra' attributes
+to be sent with your certificate request
+A challenge password []:hitlixc
+An optional company name []:congleetea
+➜  ca git:(master) ✗ ls
+ca.csr  ca.key
+#+END_SRC 
+
+**** 创建CA的证书
+#+BEGIN_SRC
+➜  ca git:(master) ✗ openssl x509 -req -in ca.csr -signkey ca.key -out ca.crt
+Signature ok
+subject=/C=cn/ST=guangdong/L=shenzhen/O=iot/OU=dev/CN=localhost/emailAddress=congleetea@ca.com
+Getting Private key
+Enter pass phrase for ca.key:
+unable to write 'random state'
+➜  ca git:(master) ✗ ls
+ca.crt  ca.csr  ca.key
+#+END_SRC
+
+到此就生成了CA机构了，他的作用就是那些权威机构的作用。然后这个"CA机构"就可以通过这里的ca.key和ca.crt
+产生服务器和客户端的认证文件。
+
+*** 生成服务端的证书
+    首先也要有一个服务端的私钥(这个你可以自己生成也可以使用openssl生成)，然后利用这个私钥生成一个CA证书的
+请求文件，在利用上一步的ca私钥和证书结合服务器CA请求文件生成服务器的证书。
+
+**** 自己生成一个服务端的私钥
+#+BEGIN_SRC
+➜  server git:(master) ✗ openssl genrsa -out server.key 1024
+Generating RSA private key, 1024 bit long modulus
+.........................................++++++
+..++++++
+unable to write 'random state'
+e is 65537 (0x10001)
+➜  server git:(master) ✗ ls
+server.key
+#+END_SRC
+
+**** 利用这个私钥生成证书的请求文件
+创建一个openssl的配置文件：
+#+BEGIN_SRC
+openssl_server.conf:
+
+[req]  
+    distinguished_name = req_distinguished_name  
+    req_extensions = v3_req  
+
+[req_distinguished_name]  
+    countryName = Country Name (2 letter code)  
+    countryName_default = CN  
+    stateOrProvinceName = State or Province Name (full name)  
+    stateOrProvinceName_default = Guangdong 
+    localityName = Locality Name (eg, city)  
+    localityName_default = ShenZhen 
+    organizationalUnitName  = Organizational Unit Name (eg, section)  
+    organizationalUnitName_default  = XXX 
+    commonName = XXX Tech Ltd  
+    commonName_max  = 64  
+
+[ v3_req ]  
+    basicConstraints = CA:FALSE  
+    keyUsage = nonRepudiation, digitalSignature, keyEncipherment  
+    subjectAltName = @alt_names  
+
+[alt_names]  
+    IP.1 = 127.0.0.1
+#+END_SRC
+然后执行：
+#+BEGIN_SRC
+➜  server git:(master) ✗ openssl req -new -key server.key -config openssl_server.conf -out server.csr
+You are about to be asked to enter information that will be incorporated
+into your certificate request.
+What you are about to enter is what is called a Distinguished Name or a DN.
+There are quite a few fields but you can leave some blank
+For some fields there will be a default value,
+If you enter '.', the field will be left blank.
+-----
+Country Name (2 letter code) [CN]:
+State or Province Name (full name) [Guangdong]:
+Locality Name (eg, city) [ShenZhen]:
+Organizational Unit Name (eg, section) [Molmc]:
+Molmc Tech Ltd []:
+➜  server git:(master) ✗ ls
+ca.crt  ca.csr  ca.key  openssl_server.conf  server.csr  server.key
+#+END_SRC
+#+BEGIN_SRC
+openssl
+#+END_SRC
+
+**** 利用服务端的请求文件和ca私钥和认证文件生成服务端的证书
+#+BEGIN_SRC
+➜  server git:(master) ✗ openssl x509 -req -CA ca.crt -CAkey ca.key -CAcreateserial -in server.csr -out server.crt -extensions v3_req -extfile openssl_server.conf
+Signature ok
+subject=/C=CN/ST=Guangdong/L=ShenZhen/OU=Molmc
+Getting CA Private Key
+Enter pass phrase for ca.key:
+unable to write 'random state'
+➜  server git:(master) ✗ ls
+ca.crt  ca.key  openssl_server.conf  server.csr
+ca.csr  ca.srl  server.crt           server.key
+#+END_SRC
+     
+到此位置就生成了服务端的私钥和证书文件了。 我们需要使用的是server.key和server.crt文件。
+
+如果要生成客户端的证书文件也使用和服务端一样的方法。由于我们使用单向的认证，所以客户端就不需要证书了。
+
+** 不使用第三方证书
+如果不使用第三方证书，可以使用下面的方法产生服务端的证书：
+#+BEGIN_SRC
+➜  server openssl genrsa -des3 -out server.key 1024
+Generating RSA private key, 1024 bit long modulus
+.++++++
+...++++++
+unable to write 'random state'
+e is 65537 (0x10001)
+Enter pass phrase for server.key:
+Verifying - Enter pass phrase for server.key:
+➜  server ls
+server.key
+➜  server ls
+openssl_server.conf  server.key
+➜  server openssl req -new -key server.key -out server.csr
+Enter pass phrase for server.key:
+You are about to be asked to enter information that will be incorporated
+into your certificate request.
+What you are about to enter is what is called a Distinguished Name or a DN.
+There are quite a few fields but you can leave some blank
+For some fields there will be a default value,
+If you enter '.', the field will be left blank.
+-----
+Country Name (2 letter code) [AU]:
+State or Province Name (full name) [Some-State]:
+Locality Name (eg, city) []:
+Organization Name (eg, company) [Internet Widgits Pty Ltd]:
+Organizational Unit Name (eg, section) []:
+Common Name (e.g. server FQDN or YOUR name) []:
+Email Address []:
+
+Please enter the following 'extra' attributes
+to be sent with your certificate request
+A challenge password []:
+An optional company name []:
+➜  server openssl req -x509 -days 365 -key server.key -in server.csr -out server.srt
+Enter pass phrase for server.key:
+➜  server ls
+openssl_server.conf  server.csr  server.key  server.srt
+#+END_SRC
+
+* SSL单项认证和双向认证
+[[http://1306733.blog.51cto.com/1296733/1736729][ssl介绍以及双向认证和单向认证原理]]
+
+这里总结各种情况下使用的证书情况：
+| 双向认证           | ca.key, ca.crt, server.key, server.crt, client.key, client.crt，以及给浏览器的client.pfx。 |
+| 有CA证书的单向认证 | ca.key, ca.crt, server.key, server.crt。                                                   |
+| 无CA证书的单向认证 | server.key, server.crt。                                                                   |
+
+基于ssl，一般的应用都是单向认证，如果应用场景要求 *对客户来源做验证* 也可以实现成双向认证。
+
+为了便于更好的认识和理解SSL协议，这里着重介绍SSL协议的握手协议。SSL协议既用到了公钥加密技术又用到了对称加密技术
+(也叫共享秘钥加密)，对称加密技术中服务器和客户端使用的秘钥是一样的，虽然比公钥加密技术的速度快,但是可能出现泄露
+的风险，公钥加密技术提供了更好的身份认证技术, 可以在一定程度上解决这个问题。
+
+SSL的握手协议非常有效的让客户和服务器之间完成相互之间的身份认证.
+
+** 单向认证其主要过程
+1  客户端的浏览器向服务器传送客户端 SSL 协议的版本号，加密算法的种类，产生的随机数，以及其他服务器和客户端之间通
+所需要的各种信息。
+
+2  服务器向客户端传送 SSL 协议的版本号，加密算法的种类，随机数以及其他相关信息，同时服务器还将向客户端传送自己的
+书。
+
+3  客户利用服务器传过来的信息验证服务器的合法性，服务器的合法性包括：证书是否过期，发行服务器证书的 CA 是否可靠，
+行者证书的公钥能否正确解开服务器证书的“发行者的数字签名”，服务器证书上的域名是否和服务器的实际域名相匹配。如果
+法性验证没有通过，通讯将断开；如果合法性验证通过，将继续进行第四步。
+4  用户端随机产生一个用于后面通讯的“对称密码”，然后用服务器的公钥（服务器的公钥从步骤②中的服务器的证书中获得）对
+加密，然后将加密后的“预主密码”传给服务器。
+
+5  如果服务器要求客户的身份认证（在握手过程中为可选），用户可以建立一个随机数然后对其进行数据签名，将这个含有签名
+随机数和客户自己的证书以及加密过的“预主密码”一起传给服务器。
+
+6  如果服务器要求客户的身份认证，服务器必须检验客户证书和签名随机数的合法性，具体的合法性验证过程包括：客户的证书
+用日期是否有效，为客户提供证书的 CA 是否可靠，发行 CA 的公钥能否正确解开客户证书的发行 CA 的数字签名，检查客户
+证书是否在证书废止列表（CRL）中。检验如果没有通过，通讯立刻中断；如果验证通过，服务器将用自己的私钥解开加密的
+预主密码”，然后执行一系列步骤来产生主通讯密码（客户端也将通过同样的方法产生相同的主通讯密码）。
+
+7  服务器和客户端用相同的主密码即“通话密码”，一个对称密钥用于 SSL 协议的安全数据通讯的加解密通讯。同时在 SSL 通讯
+程中还要完成数据通讯的完整性，防止数据通讯中的任何变化。
+
+8  客户端向服务器端发出信息，指明后面的数据通讯将使用的步骤⑦中的主密码为对称密钥，同时通知服务器客户端的握手过程
+束。
+
+9  服务器向客户端发出信息，指明后面的数据通讯将使用的步骤⑦中的主密码为对称密钥，同时通知客户端服务器端的握手过程
+束。
+
+10 SSL 的握手部分结束，SSL 安全通道的数据通讯开始，客户和服务器开始使用相同的对称密钥进行数据通讯，同时进行通讯完
+性的检验。
+
+** 双向认证
+1  浏览器发送一个连接请求给安全服务器。
+
+2  服务器将自己的证书，以及同证书相关的信息发送给客户浏览器。
+
+3  客户浏览器检查服务器送过来的证书是否是由自己信赖的 CA 中心所签发的。如果是，就继续执行协议；如果不是，客户浏
+器就给客户一个警告消息：警告客户这个证书不是可以信赖的，询问客户是否需要继续。
+
+4  接着客户浏览器比较证书里的消息，例如域名和公钥，与服务器刚刚发送的相关消息是否一致，如果是一致的，客户浏览器
+可这个服务器的合法身份。
+
+5  服务器要求客户发送客户自己的证书。收到后，服务器验证客户的证书，如果没有通过验证，拒绝连接；如果通过验证，服
+器获得用户的公钥。
+
+6  客户浏览器告诉服务器自己所能够支持的通讯对称密码方案。
+
+7  服务器从客户发送过来的密码方案中，选择一种加密程度最高的密码方案，用客户的公钥加过密后通知浏览器。
+
+8  浏览器针对这个密码方案，选择一个通话密钥，接着用服务器的公钥加过密后发送给服务器。
+
+9  服务器接收到浏览器送过来的消息，用自己的私钥解密，获得通话密钥。
+
+10 服务器、浏览器接下来的通讯都是用对称密码方案，对称密钥是加过密的。
+
+** 单双向认证的选择
+上面所述的是双向认证 SSL 协议的具体通讯过程，这种情况要求服务器和用户双方都有证书。单向认证 SSL 协议不需要客户
+拥有 CA 证书，具体的过程相对于上面的步骤，只需将服务器端验证客户证书的过程去掉，以及在协商对称密码方案，对称通
+话密钥时，服务器发送给客户的是没有加过密的（这并不影响 SSL 过程的安全性）密码方案。 这样，双方具体的通讯内容，
+就是加过密的数据，如果有第三方攻击，获得的只是加密的数据，第三方要获得有用的信息，就需要对加密的数据进行解密，
+这时候的安全就依赖于密码方案的安全。而幸运的是，目前所用的密码方案，只要通讯密钥长度足够的长，就足够的安全。这
+也是我们强调要求使用 128 位加密通讯的原因。
+
+一般web应用都是采用单向认证的，原因很简单，用户数目广泛，且无需做在通讯层做用户身份验证，一般都在应用逻辑层来保
+证用户的合法登入。
+
+但如果是企业应用对接，情况就不一样，可能会要求对client（相对而言）做身份验证。这时需要做双向认证。
+
+* mqtts如何使用
+** emqttd 服务器设置
+开启mqtts：
+#+BEGIN_SRC
+emqttd/listener:
+
+{mqtts, 8883, [
+            %% Size of acceptor pool
+            {acceptors, 32},
+
+            %% Maximum number of concurrent clients
+            {max_clients, 100000},
+
+            %% Socket Access Control
+            {access, [{allow, all}]},
+
+            %% SSL certificate and key files
+            {ssl, [{certfile, "etc/ssl/ssl.crt"},
+                   {keyfile,  "etc/ssl/ssl.key"}]},
+
+            %% Socket Options
+            {sockopts, [
+                {ifaddr, {127,0,0,1}},
+                {backlog, 1024}
+                %{buffer, 4096},
+            ]}
+        ]},
+
+        %% WebSocket over HTTPS Listener
+        {https, 18883, [
+         %% Size of acceptor pool
+         {acceptors, 32},
+         %% Maximum number of concurrent clients
+         {max_clients, 512},
+         %% Socket Access Control
+         {access, [{allow, all}]},
+         %% SSL certificate and key files
+         {ssl, [{certfile, "etc/ssl/ssl.crt"},
+                {keyfile,  "etc/ssl/ssl.key"}]},
+         %% Socket Options
+         {sockopts, [
+             {ifaddr, {127,0,0,1}},
+             %{buffer, 4096},
+             {backlog, 1024}
+         ]}
+        ]},
+#+END_SRC
+
+** client 配置
+使用mqtt.js:
+在connect的属性配置里面：
+| 端口对应emqttd的配置，使用18883使用mqtts连接。        |
+| 添加属性protocol: 'mqtts'                             |
+| 如果使用自认证方式，必须设置rejectUnauthorized: false |
+
+其他和mqtt一样。
