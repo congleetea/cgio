@@ -1,0 +1,82 @@
+#+TITLE: 2016-08-02-ERLNG_erlang_monitors.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Tuesday, August  2 2016 
+#+OPTIONS: ^:nil
+
+erlang有很多实时监控工具，对以启动的node进行监控。
+
+* etop
+[[http://erlang.org/doc/apps/observer/etop_ug.html][etop]] (Erlang Top)是一个类似unix里面的top一样展示erlang进程信息的工具。
+
+** 展示效果
+
+   [[../../images/blog/etop.png]]
+
+   界面分三部分，Load，Memory和Process。
+
+*** Load
+cpu:  
+
+通过Runtime/Wallclock计算得出。Runtime表示调度器执行进程代码，BIF，NIF，GC等的
+时间，Wallclock是打开统计依赖送调度器时钟时间，直观看二者没有意义，有意义的是二者比值，
+比值越高说明调度器的利用率越高。
+
+可以通过erlang:statistics(scheduler_wall_time)获取调度器钟表时间，函数返回：
+[{调度器Id,Runtime,Wallclock}]
+
+procs:
+
+这个节点的进程数。
+
+runq:
+
+准备运行的进程数。也就是在调度器的run queue里的进程数量。
+
+*** Memery
+分配个node的内存大小(KB)
+
+*** Process
+针对每个进程显示下面的信息：
+
+Time:
+进程的运行时间，即这个进程被调度的时间。
+
+Reds：
+该进程执行的reductions的个数。
+
+Memory：
+进程的大小，通过调用process_info(Pid,memory)得到。
+
+MsgQ：
+进程消息队里的大小。
+
+** etop的配置和启动
+可用参数：
+
+node: Vaule:atom()
+   被测量的节点。
+
+setcookie: Value:atom()
+   etop 节点使用的cookie， 要求必须和被测量的node的cookie一样。
+
+lines： Value:integer()
+   设置显示多少行processes, 默认10行。
+
+interval：Value:integer()
+   更新显示的时间间隔(s), 默认5s
+
+accumulate: Value:boolean()
+   如果设置为true，execution time和reductions将会被累加, 默认false。
+
+sort: Value:runtime|reductions|memory|msg_q
+     etop显示时根据以上的值来排序。默认runtime(如果tracing=off，则以reductions排序)
+     
+tracing: Value:on|off
+    如果设为on，那么etop使用了erlang的trace 设施，当etop在运行的时候，这个节点的其他tracing就不能
+使用。如果设为off，则可以使用。如果测量节点上tracing导致load太高，这个变量设置可以改善。当为off时，
+不被测量runtime。 默认on。
+
+* references
+| [[http://wudaijun.com/2016/05/erlang-debug-online/][erlang实践(2)状态监控]] |
+|                       |
