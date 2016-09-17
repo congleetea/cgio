@@ -1,0 +1,55 @@
+#+TITLE: 2016-09-17-ERLNG_custumize_behaviour.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Saturday, September 17 2016 
+#+OPTIONS: ^:nil
+
+* 行为模式
+我们有常用的一些 OTP 定义好的行为模式，比如 gen_server,supervisor,gen_event 等。同时我们也可以
+自己定义一些行为模式。
+
+如果使用了行为模式，我们必须定义并导出定义好的回调函数。如果缺了任何一个都会提示用户。
+
+* 实例
+#+BEGIN_SRC erlang
+-module(emqttd_acl_mod).
+-include("emqttd.hrl").
+%%--------------------------------------------------------------------
+%% ACL behavihour
+%%--------------------------------------------------------------------
+-ifdef(use_specs).
+-callback init(AclOpts :: list()) -> {ok, State :: any()}.
+
+-callback check_acl({Client, PubSub, Topic}, State :: any()) -> allow | deny | ignore when
+    Client   :: mqtt_client(),
+    PubSub   :: pubsub(),
+    Topic    :: binary().
+
+-callback reload_acl(State :: any()) -> ok | {error, any()}.
+
+-callback description() -> string().
+
+-else.
+-export([behaviour_info/1]).
+
+behaviour_info(callbacks) ->
+    [{init, 1}, {check_acl, 2}, {reload_acl, 1}, {description, 0}];
+behaviour_info(_Other) ->
+    undefined.
+
+-endif.
+#+END_SRC
+
+在自定义行为模式中，我们主要任务就是规定行为模式的回调函数，比如上面的实例中我们先看 else 后面的定义，
+它直接使用 behavior_info(callbacks) 导出所有的回调模块。
+
+但是这又一个问题，就是没有函数类型规范的约束，只有简单的函数名和元数的约束。因此，如果使用-spec 关键字，
+就只能使用 callback 关键字，即上面实例的 ifdef(use_specs) 中的方式, 这种方式不需要显式的输出 behaviour_info(callbacks), 
+他会自动生成该函数并导出。
+
+* 内部调用回调
+在使用 gen_server 的时候，我们知道当使用 gen_server:start_link 之后就会自动执行行为模式的回调 init/1，
+我们在自定义行为模式的时候也可以实现这样的功能：
+
+我们定义 start_link 函数或者 stop 函数的时候将我们定义回调的模块 Mod 传递进去，然后 Mod:init 就会调用 init 函数了，其他
+也是一样的。
