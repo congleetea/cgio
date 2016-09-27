@@ -1,6 +1,6 @@
 #+TITLE: 2016-07-04-EMQTTD_keepalive.org
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Monday, July  4 2016 
 #+OPTIONS: ^:nil
 

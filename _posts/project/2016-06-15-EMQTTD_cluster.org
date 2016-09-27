@@ -1,415 +1,419 @@
 #+TITLE: 2016-06-15-EMQTTD_cluster
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Wednesday, June 15 2016 
 #+OPTIONS: ^:nil
 
 
-** question
-| 1 集群的目的是什么？                           | 分散连接，实现更多的连接                                                                                                          |
-| 2 集群需要同步那些消息? 如何同步？             | 通过使用observer:start()可以看哪些表被同步了。(mqtt_admin,retained_message,route,session,topic,trie,trie_node),subscription不同步 |
-| 3 同一个client在不同node上登陆会出现什么情况？ | emqttd识别个体是根据clientid来识别的，当clientid一样的时候只能在集群的其中一台机器上登陆。                                        |
-| 4 cleanSession不同情况下什么情形？             |                                                                                                                                   |
+* question
+** 集群的目的是什么？                            
+分散连接，实现更多的连接                                                                                                          
+** 集群需要同步那些消息? 如何同步？              
+通过使用 observer:start()可以看哪些表被同步了。(mqtt_admin,retained_message,route,session,topic,trie,trie_node),subscription 不同步 
+** 同一个 client 在不同 node 上登陆会出现什么情况？  
+emqttd 识别个体是根据 clientid 来识别的，当 clientid 一样的时候只能在集群的其中一台机器上登陆。                                        
+** cleanSession 不同情况下什么情形？
 
-** cluster 步骤
-*** 主要设计到几个emqttd中的文件
-**** emqttd_cli.erl
-这个文件里面定义了我们使用emqttd_ctl命令操作的内容。
-我们手动启动插件，集群操作，其他状态查询都是通过这个命令来实现的。
-这个文件里面包括1：对命令的注册和注销 2：封装命令的接口。
+* cluster 步骤
+  建立 erlang 的集群又两步，一个是建立节点间的通信，二是实现 mnesia 的冗余同步.
+** 主要设计到几个 emqttd 中的文件
+*** emqttd_cli.erl
+个文件里面定义了我们使用 emqttd_ctl 命令操作的内容。
+们手动启动插件，集群操作，其他状态查询都是通过这个命令来实现的。
+个文件里面包括 1：对命令的注册和注销 2：封装命令的接口。
 
-对集群的操作命令是：
+集群的操作命令是：
 #+BEGIN_SRC
-./emqttd_ctl cluster join RometeNode
-./emqttd_ctl cluster leave      %% 本节点脱离集群
-./emqttd_ctl cluster remove RometeNode %% 把某个node从集群中删除
+  ./emqttd_ctl cluster join RometeNode
+  ./emqttd_ctl cluster leave      %% 本节点脱离集群
+  ./emqttd_ctl cluster remove RometeNode %% 把某个 node 从集群中删除
 #+END_SRC
-**** emqttd_cluster.erl
-这个文件里面是集群的实现，被emqttd_cli.erl里面进行了调用。
-**** emqttd_mnesia.erl 
-这里面封装了对mnesia的操作，而集群的主要内容就是对集群进行操作。
-*** join
-对集群的操作首先都会判断这个node是否在这个集群里面，满足条件之后才执行集群的操作。
+*** emqttd_cluster.erl
+个文件里面是集群的实现，被 emqttd_cli.erl 里面进行了调用。
+*** emqttd_mnesia.erl 
+里面封装了对 mnesia 的操作，而集群的主要内容就是对集群进行操作。
+** join
+集群的操作首先都会判断这个 node 是否在这个集群里面，满足条件之后才执行集群的操作。
 
-join一个集群，需要满足的是1：这个节点还不属于这个集群，2：这个节点正在运行。
+join 一个集群，需要满足的是 1：这个节点还不属于这个集群，2：这个节点正在运行, 判断节点是否运行的时候会 ping 对方节点, 获得回应。
 
-join的三个步骤：
-**** prepare()
+join 的三个步骤：
+*** prepare()
 #+BEGIN_SRC
 -spec(prepare() -> ok).
 prepare() ->
-    emqttd_plugins:unload(),
-    lists:foreach(fun application:stop/1, [emqttd, mochiweb, esockd, gproc]).
+   emqttd_plugins:unload(),
+   lists:foreach(fun application:stop/1, [emqttd, mochiweb, esockd, gproc]).
 #+END_SRC
-这一步是为了集群join或者leave做准备的。
+这一步是为了集群 join 或者 leave 做准备的。
 
-这个函数首先stop所有的插件，然后stop 几个app： emqttd，mochiweb，esockd，gproc。
+这个函数首先 stop 所有的插件，然后 stop 几个 app：emqttd，mochiweb，esockd，gproc。
 
-这样就保证了mnesia不会在被操作。
+样就保证了 mnesia 不会在被操作。
 
-**** emqttd_mnesia:join_cluster(RemoteNode)
+*** emqttd_mnesia:join_cluster(RemoteNode)
 #+BEGIN_SRC
-%% @doc Join the mnesia cluster
+% @doc Join the mnesia cluster
 -spec(join_cluster(node()) -> ok).
 join_cluster(Node) when Node =/= node() ->
-    %% Stop mnesia and delete schema first
-    ensure_ok(ensure_stopped()), %% call mnesia:stop() and wait for stopping
-    ensure_ok(delete_schema()),  %% call mnesia:delete_schema([node()]) 删除本地node的schema,这个操作会把所有数据和表都清除掉。
-    %% Start mnesia and cluster to node
-    ensure_ok(ensure_started()), %% 启动本地节点的mnesia。
-    ensure_ok(connect(Node)),    %% Cluster with node. 
-    ensure_ok(copy_schema(node())),
-    %% Copy tables
-    copy_tables(),
-    ensure_ok(wait_for(tables)).
+   %% Stop mnesia and delete schema first
+   ensure_ok(ensure_stopped()), %% call mnesia:stop() and wait for stopping
+   ensure_ok(delete_schema()),  %% call mnesia:delete_schema([node()]) 删除本地 node 的 schema,这个操作会把所有数据和表都清除掉。
+   %% Start mnesia and cluster to node
+   ensure_ok(ensure_started()), %% 启动本地节点的 mnesia。
+   ensure_ok(connect(Node)),    %% Cluster with node. 
+   ensure_ok(copy_schema(node())),
+   %% Copy tables
+   copy_tables(),
+   ensure_ok(wait_for(tables)).
 #+END_SRC
-这一步通过对mnesia的操作来实现集群。
-每一步都要确保成功，因此很多步骤使用wait_for来等待任务执行成功。
+这一步通过对 mnesia 的操作来实现集群。
+每一步都要确保成功，因此很多步骤使用 wait_for 来等待任务执行成功。
 
 connect(Node)函数的调用：
 #+BEGIN_SRC
-%% @doc Cluster with node.
+% @doc Cluster with node.
 -spec(connect(node()) -> ok | {error, any()}).
 connect(Node) ->
-    case mnesia:change_config(extra_db_nodes, [Node]) of
-        {ok, [Node]} -> ok;
-        {ok, []}     -> {error, {failed_to_connect_node, Node}};
-        Error        -> Error
-    end.
+   case mnesia:change_config(extra_db_nodes, [Node]) of
+       {ok, [Node]} -> ok;
+       {ok, []}     -> {error, {failed_to_connect_node, Node}};
+       Error        -> Error
+   end.
 #+END_SRC
-注意这个重要的函数mnesia:change_config.
+注意这个重要的函数 mnesia:change_config.
 #+BEGIN_SRC
 change_config(Config, Value) -> {error, Reason} | {ok, ReturnValue}
 
-              Config is to be an atom of the following configuration parameters:
+             Config is to be an atom of the following configuration parameters:
 
-                extra_db_nodes:
-                  Value is a list of nodes that Mnesia is to try to connect to. ReturnValue is those nodes in Value  that  Mnesia  is  con‐
-                  nected to.
+               extra_db_nodes:
+                 Value is a list of nodes that Mnesia is to try to connect to. ReturnValue is those nodes in Value  that  Mnesia  is  con‐
+                 nected to.
 
-                  Notice  that this function must only be used to connect to newly started RAM nodes (N.D.R.S.N.) with an empty schema. If,
-                  for example, this function is used after the network has been partitioned, it can lead to inconsistent tables.
+                 Notice  that this function must only be used to connect to newly started RAM nodes (N.D.R.S.N.) with an empty schema. If,
+                 for example, this function is used after the network has been partitioned, it can lead to inconsistent tables.
 
-                  Notice that Mnesia can be connected to other nodes than those returned in ReturnValue.
+                 Notice that Mnesia can be connected to other nodes than those returned in ReturnValue.
 
-                dc_dump_limit:
-                  Value is a number. See the description in Section Configuration Parameters. ReturnValue is the  new  value.  Notice  that
-                  this configuration parameter is not persistent. It is lost when Mnesia has stopped.
+               dc_dump_limit:
+                 Value is a number. See the description in Section Configuration Parameters. ReturnValue is the  new  value.  Notice  that
+                 this configuration parameter is not persistent. It is lost when Mnesia has stopped.
 #+END_SRC
-也就是说这个函数的Config参数是extra_db_nodes的时候，Value是相连接的节点上的mnesia。返回值就是成功连接的Node列表。但是要注意我们要连接的节点上
-的schema必须是空的,否则会出现问题，比如在network partition时执行，可能会导致数据表不一致。
+就是说这个函数的 Config 参数是 extra_db_nodes 的时候，Value 是相连接的节点上的 mnesia。返回值就是成功连接的 Node 列表。但是要注意我们要连接的节点上
+schema 必须是空的,否则会出现问题，比如在 network partition 时执行，可能会导致数据表不一致。
 
-通过change_config我们就设置了两个节点的数据可以同步了。后面的所有操作都会进行同步。
+过 change_config 我们就设置了两个节点的数据可以同步了。后面的所有操作都会进行同步。
 
-接着是函数copy_schema(node())调用mnesia:change_table_copy_type(schema,node(),disc_copies)来复制schema。
-因为我们在前面已经使用change_config进行了连接的设置，这里将schema改变为disc_copies，那么远端的node上也会得到一个副本。
+着是函数 copy_schema(node())调用 mnesia:change_table_copy_type(schema,node(),disc_copies)来复制 schema。
+为我们在前面已经使用 change_config 进行了连接的设置，这里将 schema 改变为 disc_copies，那么远端的 node 上也会得到一个副本。
 #+BEGIN_SRC
-       change_table_copy_type(Tab, Node, To) -> {aborted, R} | {atomic, ok}
+      change_table_copy_type(Tab, Node, To) -> {aborted, R} | {atomic, ok}
 
-              For example:
+             For example:
 
-              mnesia:change_table_copy_type(person, node(), disc_copies)
+             mnesia:change_table_copy_type(person, node(), disc_copies)
 
-              Transforms the person table from a RAM table into a disc-based table at Node.
+             Transforms the person table from a RAM table into a disc-based table at Node.
 
-              This function can also be used to change the storage type of the table named schema. The schema table can only have ram_copies or disc_copies
-              as the storage type. If the storage type of the schema is ram_copies, no other table can be disc-resident on that node.
+             This function can also be used to change the storage type of the table named schema. The schema table can only have ram_copies or disc_copies
+             as the storage type. If the storage type of the schema is ram_copies, no other table can be disc-resident on that node.
 #+END_SRC
-该函数将本地节点上的ram_copies表schema改为disc_copies类型的表。
+函数将本地节点上的 ram_copies 表 schema 改为 disc_copies 类型的表。
 
-然后是copy_tables() 拷贝mnesia表，这个过程可能会话一些时间， 因此后面使用wait_for(tables)来等待表复制完成。
+后是 copy_tables() 拷贝 mnesia 表，这个过程可能会话一些时间， 因此后面使用 wait_for(tables)来等待表复制完成。
 
-至此就完成了mnesia的集群。下面就要重启emqttd及他的插件和依赖项了。
-**** reboot()
-#+BEGIN_SRC
-     lists:foreach(fun application:start/1, [gproc, esockd, mochiweb, emqttd]).
-#+END_SRC
-这样加入集群的节点之间的mnesia就会同步了。
+此就完成了 mnesia 的集群。下面就要重启 emqttd 及他的插件和依赖项了。
+*** reboot()
++BEGIN_SRC
+    lists:foreach(fun application:start/1, [gproc, esockd, mochiweb, emqttd]).
++END_SRC
+样加入集群的节点之间的 mnesia 就会同步了。
 
-类似的leave和remove操作也是同样对mnesia进行操作。就详述了。
+似的 leave 和 remove 操作也是同样对 mnesia 进行操作。就详述了。
 
-** erlang tips
-*** erlang的init模块
-| [[https://yq.aliyun.com/articles/42296][erlang 模块之 init]] |
-*** erlang的远程过程调用
-| [[https://yq.aliyun.com/articles/42307][erlang模块之rpc]]                  |
-| [[https://www.zhihu.com/question/37794320][关于erlang的rpc:call中的同步问题]] |
+* erlang tips
+** erlang 的 init 模块
+ [[https://yq.aliyun.com/articles/42296][erlang 模块之 init]] |
+** erlang 的远程过程调用
+ [[https://yq.aliyun.com/articles/42307][erlang 模块之 rpc]]                  |
+ [[https://www.zhihu.com/question/37794320][关于 erlang 的 rpc:call 中的同步问题]] |
 
-*** 熟悉nmesia的各种操作
-集群最重要的就是对mnesia的远程操作。
+** 熟悉 nmesia 的各种操作
+群最重要的就是对 mnesia 的远程操作。
 
-参考 Mnesia用户手册.pdf， 理解mnesia的schema构建数据库模式和启动过程。
+考 Mnesia 用户手册.pdf， 理解 mnesia 的 schema 构建数据库模式和启动过程。
 
-**** 构建mnesia数据库
-mnesia的系统配置在模式(schema)中描述。模式(schema)是一种特殊的表，它包含了诸如表名、每个
-表的存储类型(例如,表应该存储到 RAM、硬盘或者可能是两者以及表的位置)等信息。
+*** 构建 mnesia 数据库
+nesia 的系统配置在模式(schema)中描述。模式(schema)是一种特殊的表，它包含了诸如表名、每个
+的存储类型(例如,表应该存储到 RAM、硬盘或者可能是两者以及表的位置)等信息。
 
-不像数据表,模式表里包含的信息 *只能通过与模式相关的函数来访问和修改* 。Mnesia 提供多种方
-法来定义数据库模式,可以移动、删除表或者重新配置表的布局。这些方法的一个重要特性是当
-表在重配置的过程中可以被访问。
-下面是操作模式表的一些模式函数：
+像数据表,模式表里包含的信息 *只能通过与模式相关的函数来访问和修改* 。Mnesia 提供多种方
+来定义数据库模式,可以移动、删除表或者重新配置表的布局。这些方法的一个重要特性是当
+在重配置的过程中可以被访问。
+面是操作模式表的一些模式函数：
 
-***** mnesia:create_schema(NodeList)
-该函数用来初始化一个新的空模式,在 Mnesia启动之前这是一个强制性的必要步骤。Mnesia 是一个真正
-分布式的数据库管理系统,而模式是一个系统表,它被复制到 Mnesia 系统的所有节点上。如果NodeList中
-某一个节点已经有模式,则该函数会失败。该函数需要 NodeList 中所有节点上的 Mnesia 都停止之后
-才执行。应用程序只需调用该函数一次,因为通常只需要初始化数据库模式一次 。
+**** mnesia:create_schema(NodeList)
+函数用来初始化一个新的空模式,在 Mnesia 启动之前这是一个强制性的必要步骤。Mnesia 是一个真正
+布式的数据库管理系统,而模式是一个系统表,它被复制到 Mnesia 系统的所有节点上。如果 NodeList 中
+一个节点已经有模式,则该函数会失败。该函数需要 NodeList 中所有节点上的 Mnesia 都停止之后
+执行。应用程序只需调用该函数一次,因为通常只需要初始化数据库模式一次 。
 
-***** mnesia:delete_schema(DiscNodeList)
-该函数在 DiscNodeList 节点上删除旧的模式,它也删除所有旧的表和数据。 *该函数需要在所有数据库节点(db_nodes)上的Mnesia都停止后才能执行*
+**** mnesia:delete_schema(DiscNodeList)
+函数在 DiscNodeList 节点上删除旧的模式,它也删除所有旧的表和数据。 *该函数需要在所有数据库节点(db_nodes)上的 Mnesia 都停止后才能执行*
 
-***** mnesia:delete_table(Tab)
- 该函数永久删除表 Tab 的所有副本 。     
-***** mnesia:clear_table(Tab)
-该函数永久删除表 Tab 的全部记录(表没有被删除，只是表里面没有内容了)。
+**** mnesia:delete_table(Tab)
+该函数永久删除表 Tab 的所有副本 。     
+**** mnesia:clear_table(Tab)
+函数永久删除表 Tab 的全部记录(表没有被删除，只是表里面没有内容了)。
 
-***** mnesia:move_table_copy(Tab, From, To)
-该函数将 *表Tab的拷贝* 从From节点移动到To节点。表的存储类型{type}被保留,这样当移动一个RAM表到另一个节点时,在
-新节点上也维持一个RAM表。 *在表移动的过程中仍然可以有事务执行读和写操作.* 
+**** mnesia:move_table_copy(Tab, From, To)
+函数将 *表 Tab 的拷贝* 从 From 节点移动到 To 节点。表的存储类型{type}被保留,这样当移动一个 RAM 表到另一个节点时,在
+节点上也维持一个 RAM 表。 *在表移动的过程中仍然可以有事务执行读和写操作.* 
 
-***** mnesia:add_table_copy(Tab, Node, Type)
-该函数在Node节点上创建Tab表的备份。Type参数必须是ram_copies,disc_copies或者是disc_only_copies. 
-*如果我们加一个系统表schema的拷贝到某个节点上,这意味着我们要Mnesia模式也驻留在那里.这个动作扩展了组成特定Mnesia系统节点的集合*.
+**** mnesia:add_table_copy(Tab, Node, Type)
+函数在 Node 节点上创建 Tab 表的备份。Type 参数必须是 ram_copies,disc_copies 或者是 disc_only_copies. 
+如果我们加一个系统表 schema 的拷贝到某个节点上,这意味着我们要 Mnesia 模式也驻留在那里.这个动作扩展了组成特定 Mnesia 系统节点的集合*.
 
-***** mnesia:del_table_copy(Tab, Node)
-该函数在 Node 节点上删除 Tab 表的备份,当最后一个备份被删除后,表本身也被删除。
-***** mnesia:transform_table(Tab, Fun, NewAttributeList, NewRecordName)
-该函数改变表 Tab 中所有记录的格式。它对表里所有记录调用参数 Fun 指明的函数进行处
-理,从表中取得旧的记录类型处理后返回新的纪录类型,表的键(key)可以不被改变。
-#+BEGIN_SRC
--record(old, {key, val}).
--record(new, {key, val, extra}).
-Transformer =
-fun(X) when record(X, old) ->
-        #new{key = X#old.key,
-             val = X#old.val,
-             extra = 42}
-end,
-{atomic, ok} = mnesia:transform_table(foo, Transformer,
-                                      record_info(fields, new),
-                                      new),
-#+END_SRC
-Fun的参数也可以是原子ignore,它表示只更新表的元(meta)数据, *不推荐使用* (因为它将在
-元数据和实际数据之间产生矛盾)。但有可能用户需要用其在离线时做自己的转换。
+**** mnesia:del_table_copy(Tab, Node)
+函数在 Node 节点上删除 Tab 表的备份,当最后一个备份被删除后,表本身也被删除。
+**** mnesia:transform_table(Tab, Fun, NewAttributeList, NewRecordName)
+函数改变表 Tab 中所有记录的格式。它对表里所有记录调用参数 Fun 指明的函数进行处
+,从表中取得旧的记录类型处理后返回新的纪录类型,表的键(key)可以不被改变。
++BEGIN_SRC
+record(old, {key, val}).
+record(new, {key, val, extra}).
+ransformer =
+un(X) when record(X, old) ->
+       #new{key = X#old.key,
+            val = X#old.val,
+            extra = 42}
+nd,
+atomic, ok} = mnesia:transform_table(foo, Transformer,
+                                     record_info(fields, new),
+                                     new),
++END_SRC
+un 的参数也可以是原子 ignore,它表示只更新表的元(meta)数据, *不推荐使用* (因为它将在
+数据和实际数据之间产生矛盾)。但有可能用户需要用其在离线时做自己的转换。
 
-***** change_table_copy_type(Tab, Node, ToType)
-该函数改变表的存储类型。例如,将在 Node 节点上指定的内存类型的表 Tab 改为磁盘类型的表.
+**** change_table_copy_type(Tab, Node, ToType)
+函数改变表的存储类型。例如,将在 Node 节点上指定的内存类型的表 Tab 改为磁盘类型的表.
 
-**** 初始化模式schema并启动mnesia
-主要有一下几个步骤：
-***** 启动erlang
-启动erlang的同时指定mnesia的数据保存路径，如果不指定则以当前节点使用erlang shell启动
-时的工作目录作为mnesia目录。
-这时候也可以指定节点的短域名（用以启动不同的节点） 
+*** 初始化模式 schema 并启动 mnesia
+要有一下几个步骤：
+**** 启动 erlang
+动 erlang 的同时指定 mnesia 的数据保存路径，如果不指定则以当前节点使用 erlang shell 启动
+的工作目录作为 mnesia 目录。
+时候也可以指定节点的短域名（用以启动不同的节点） 
 
-下面启动两个节点:
-#+BEGIN_SRC
-$ erl -sname a -mnesia dir '"/home/xxx/testmnesia"'
-$ erl -sname b -mnesia dir '"/home/xxx/testmnesia"'
-#+END_SRC
+面启动两个节点:
++BEGIN_SRC
+ erl -sname a -mnesia dir '"/home/xxx/testmnesia"'
+ erl -sname b -mnesia dir '"/home/xxx/testmnesia"'
++END_SRC
 
-***** 在一个节点上创建schema
-比如在a上创建一个schema：
-#+BEGIN_SRC
-(a@127.0.0.1)> mnesia:create_schema(['a@127.0.0.1', 'b@127.0.0.1']).
-#+END_SRC
-这样我们会在两个节点上都创建一个空的schema，通过对schema进行配置我们可以实现两个节点数
-据的同步,也就进一步实现了mnesia数据库的集群。
-至于配置的东西这里就不讲了。
-***** 启动mnesia
-利用mnesia:start()来启动mnesia。
-该函数会在本地初始化DBMS，表的初始化是同步的。
-函数调用 mnesia:start()返回原子 ok 并且开始初始化不同的表。如果数据库比
-较大,将花费一些时间,应用程序员必须等待,直到应用程序要用到的表可用时为止。这可以使
-用下列函数来实现:
-#+BEGIN_SRC
- mnesia:wait_for_tables(TabList, Timeout)
-#+END_SRC
-此函数暂停调用程序直到在 Tablist 中指定的全部表都正确的初始化完成。
+**** 在一个节点上创建 schema
+如在 a 上创建一个 schema：
++BEGIN_SRC
+a@127.0.0.1)> mnesia:create_schema(['a@127.0.0.1', 'b@127.0.0.1']).
++END_SRC
+样我们会在两个节点上都创建一个空的 schema，通过对 schema 进行配置我们可以实现两个节点数
+的同步,也就进一步实现了 mnesia 数据库的集群。
+于配置的东西这里就不讲了。
+**** 启动 mnesia
+用 mnesia:start()来启动 mnesia。
+函数会在本地初始化 DBMS，表的初始化是同步的。
+数调用 mnesia:start()返回原子 ok 并且开始初始化不同的表。如果数据库比
+大,将花费一些时间,应用程序员必须等待,直到应用程序要用到的表可用时为止。这可以使
+下列函数来实现:
++BEGIN_SRC
+mnesia:wait_for_tables(TabList, Timeout)
++END_SRC
+函数暂停调用程序直到在 Tablist 中指定的全部表都正确的初始化完成。
 
-如果 Mnesia 推断另一个节点(远程)的拷贝比本地节点的拷贝更新时,初始化时在节点上复制
-表可能会导致问题,初始化进程无法处理。在这种情况下,对 mnesia:wait_for_tables/2 的调用将暂
-停调用进程,直到远程节点从其本地磁盘初始化表后通过网络将表复制到本地节点上。
-**** 下面就可以创建各种表了
-创建的表会在schema数据表中保留基本信息，每次初始化的时候都会根据schema来初始化。
+果 Mnesia 推断另一个节点(远程)的拷贝比本地节点的拷贝更新时,初始化时在节点上复制
+可能会导致问题,初始化进程无法处理。在这种情况下,对 mnesia:wait_for_tables/2 的调用将暂
+调用进程,直到远程节点从其本地磁盘初始化表后通过网络将表复制到本地节点上。
+*** 下面就可以创建各种表了
+建的表会在 schema 数据表中保留基本信息，每次初始化的时候都会根据 schema 来初始化。
 
-**** test emqttd cluster 
-主要为了理解mnesia:change_config的作用。
+*** test emqttd cluster 
+要为了理解 mnesia:change_config 的作用。
 
-首先建立这个文件，定义我们要使用的记录：
-#+BEGIN_SRC
-%% person.hrl
--record(person, {name, age}).
-#+END_SRC
-这个文件可以在erl的console中使用rr命令引入。
+先建立这个文件，定义我们要使用的记录：
++BEGIN_SRC
+% person.hrl
+record(person, {name, age}).
++END_SRC
+个文件可以在 erl 的 console 中使用 rr 命令引入。
 
-接下来创建两个节点：
-#+BEGIN_SRC
-lee$ erl -sname a -mnesia dir '"/home/congleetea/a@lee"'
-lee$ erl -sname b -mnesia dir '"/home/congleetea/b@lee"'
-#+END_SRC
+下来创建两个节点：
++BEGIN_SRC
+ee$ erl -sname a -mnesia dir '"/home/congleetea/a@lee"'
+ee$ erl -sname b -mnesia dir '"/home/congleetea/b@lee"'
++END_SRC
 
-现在在a上为两个node创建一个schema并启动mnesia：
-#+BEGIN_SRC
-(a@lee)1> mnesia:create_schema([a@lee, b@lee]). %% 会产生/home/congleetea/a@lee和/home/congleetea/b@lee目录, 各个节点的mnesia数据就在这里.
-ok
-(a@lee)2> mnesia:start().
-ok
-(a@lee)3> mnesia:change_config(extra_db_nodes, [b@lee]). %% 和b@lee的mnesia建立连接，这样数据就可以同步了。
-{ok,[b@lee]}
-(a@lee)4> rr("person.hrl").                            %% rr(read record)引入record 
-[persion]
-(a@lee)5> mnesia:create_table(person, [{type, bag},{ram_copies, [node()]},{record_name, person},{attributes, record_info(fields, person)}]). 
-{atomic,ok}
-(a@lee)6> mnesia:dirty_write(person, #person{name=lee, age=26}).
-ok
-(a@lee)7> mnesia:dirty_read(person, lee).
-[#person{name = lee,age = 26}]
-#+END_SRC
+在在 a 上为两个 node 创建一个 schema 并启动 mnesia：
++BEGIN_SRC
+a@lee)1> mnesia:create_schema([a@lee, b@lee]). %% 会产生/home/congleetea/a@lee 和/home/congleetea/b@lee 目录, 各个节点的 mnesia 数据就在这里.
+k
+a@lee)2> mnesia:start().
+k
+a@lee)3> mnesia:change_config(extra_db_nodes, [b@lee]). %% 和 b@lee 的 mnesia 建立连接，这样数据就可以同步了。
+ok,[b@lee]}
+a@lee)4> rr("person.hrl").                            %% rr(read record)引入 record 
+persion]
+a@lee)5> mnesia:create_table(person, [{type, bag},{ram_copies, [node()]},{record_name, person},{attributes, record_info(fields, person)}]). 
+atomic,ok}
+a@lee)6> mnesia:dirty_write(person, #person{name=lee, age=26}).
+k
+a@lee)7> mnesia:dirty_read(person, lee).
+#person{name = lee,age = 26}]
++END_SRC
 
-在b上执行：
-#+BEGIN_SRC
-(b@lee)1> mnesia:start().
-ok
-(b@lee)2> mnesia:system_info().
-===> System info in version "4.13.3", debug level = none <===
-opt_disc. Directory "/home/congleetea/b@lee" is used.
-use fallback at restart = false
-running db nodes   = [a@lee,b@lee]
-stopped db nodes   = [] 
-master node tables = []
-remote             = [person]
-ram_copies         = []
-disc_copies        = [schema]
-disc_only_copies   = []
-[{a@lee,disc_copies},{b@lee,disc_copies}] = [schema]
-[{a@lee,ram_copies}] = [person]
-3 transactions committed, 0 aborted, 0 restarted, 5 logged to disc
-0 held locks, 0 in queue; 0 local transactions, 0 remote
-0 transactions waits for other nodes: []
-yes
-(b@lee)3> mnesia:dirty_read(person, lee).  %% 没有引入记录的时候显示如下
-[{person,lee,26}]
-(b@lee)4> rr("person.hrl").
-[person]
-(b@lee)5> mnesia:dirty_read(person, lee).
-[#persiona{name = lee,age = 26}]
-(b@lee)6>
-#+END_SRC
+b 上执行：
++BEGIN_SRC
+b@lee)1> mnesia:start().
+k
+b@lee)2> mnesia:system_info().
+==> System info in version "4.13.3", debug level = none <===
+pt_disc. Directory "/home/congleetea/b@lee" is used.
+se fallback at restart = false
+unning db nodes   = [a@lee,b@lee]
+topped db nodes   = [] 
+aster node tables = []
+emote             = [person]
+am_copies         = []
+isc_copies        = [schema]
+isc_only_copies   = []
+{a@lee,disc_copies},{b@lee,disc_copies}] = [schema]
+{a@lee,ram_copies}] = [person]
+ transactions committed, 0 aborted, 0 restarted, 5 logged to disc
+ held locks, 0 in queue; 0 local transactions, 0 remote
+ transactions waits for other nodes: []
+es
+b@lee)3> mnesia:dirty_read(person, lee).  %% 没有引入记录的时候显示如下
+{person,lee,26}]
+b@lee)4> rr("person.hrl").
+person]
+b@lee)5> mnesia:dirty_read(person, lee).
+#persiona{name = lee,age = 26}]
+b@lee)6>
++END_SRC
 
-可见，在b上已经同步了a的数据，在两台机器上的操作效果是一样的。
+见，在 b 上已经同步了 a 的数据，在两台机器上的操作效果是一样的。
 
-*** 如何处理retain的消息
-#+BEGIN_SRC
-%% @doc Retain a message
--spec(retain(mqtt_message()) -> ok | ignore).
-retain(#mqtt_message{retain = false}) -> ignore;
+** 如何处理 retain 的消息
++BEGIN_SRC
+% @doc Retain a message
+spec(retain(mqtt_message()) -> ok | ignore).
+etain(#mqtt_message{retain = false}) -> ignore;
 
-%% RETAIN flag set to 1 and payload containing zero bytes
-retain(#mqtt_message{retain = true, topic = Topic, payload = <<>>}) ->
-    emqttd_backend:delete_message(Topic);
+% RETAIN flag set to 1 and payload containing zero bytes
+etain(#mqtt_message{retain = true, topic = Topic, payload = <<>>}) ->
+   emqttd_backend:delete_message(Topic);
 
-retain(Msg = #mqtt_message{topic = Topic, retain = true, payload = Payload}) ->
-    TabSize = emqttd_backend:retained_count(), %% Returns the number of records inserted in the table.
-    case {TabSize < limit(table), size(Payload) < limit(payload)} of
-        {true, true} ->
-            emqttd_backend:retain_message(Msg),
-            emqttd_metrics:set('messages/retained', emqttd_backend:retained_count());
-       {false, _}->
-            lager:error("Cannot retain message(topic=~s) for table is full!", [Topic]);
-       {_, false}->
-            lager:error("Cannot retain message(topic=~s, payload_size=~p)"
-                            " for payload is too big!", [Topic, size(Payload)])
-    end, ok.
+etain(Msg = #mqtt_message{topic = Topic, retain = true, payload = Payload}) ->
+   TabSize = emqttd_backend:retained_count(), %% Returns the number of records inserted in the table.
+   case {TabSize < limit(table), size(Payload) < limit(payload)} of
+       {true, true} ->
+           emqttd_backend:retain_message(Msg),
+           emqttd_metrics:set('messages/retained', emqttd_backend:retained_count());
+      {false, _}->
+           lager:error("Cannot retain message(topic=~s) for table is full!", [Topic]);
+      {_, false}->
+           lager:error("Cannot retain message(topic=~s, payload_size=~p)"
+                           " for payload is too big!", [Topic, size(Payload)])
+   end, ok.
 
-#+END_SRC
++END_SRC
 
-对topic分三种情况处理：
-**** retain == false
-对这一类topic不做任何处理
+topic 分三种情况处理：
+*** retain == false
+这一类 topic 不做任何处理
 
-**** retain == true but payload == <<>>
-这一类topic会清除mnesia中保存的retained消息.
-调用 mnesia:dirty_delete(retained_message, Topic) 删除mnesia中的retained topic.
-
-
-**** retain == true but payload =/= <<>>
-
-对retain消息的限制：
-#+BEGIN_SRC
-limit(table)   -> env(max_message_num);
-limit(payload) -> env(max_playload_size).
-
-env(Key) ->
-    case get({retained, Key}) of
-        undefined ->
-            Env = emqttd_broker:env(retained),
-            Val = proplists:get_value(Key, Env),
-            put({retained, Key}, Val), Val;
-        Val ->
-            Val
-    end.
-#+END_SRC 
-对表的限制主要是这个表能容纳多少消息数量, 这个由emqttd.config中的broker/retained配置决定， 下面设置最多能容纳100000条消息。
-
-对payload的大小限制, 一个topic最大的字节。
-#+BEGIN_SRC
-    %% Broker Options
-    {broker, [
-        %% System interval of publishing broker $SYS messages
-        {sys_interval, 60},
-
-        %% Retained messages
-        {retained, [
-            %% Expired after seconds, never expired if 0
-            {expired_after, 0},
-
-            %% Max number of retained messages
-            {max_message_num, 100000}, 
-
-            %% Max Payload Size of retained message
-            {max_playload_size, 65536}
-        ]},
-#+END_SRC
-
-如满足对大小的限制就调用emqttd_backend中retain_message函数将该topic写入mnesia。
-retain_message(Msg = #mqtt_message{topic = Topic}) ->
-    mnesia:dirty_write(#retained_message{topic = Topic, msg = Msg}).
-
-这样就完成了对retain消息的存储了。
-
-*** 消息的路由分发机制
-首先， 消息经过基层发出：
-emqttd_protocol:publish ---> emqttd_session:publish ---> emqttd:publish ---> emqttd_server:publish ----> emqttd_pubsub:publish 
-
-接着进入路由route层：
-#+BEGIN_SRC
-%% @doc Publish message to Topic.
--spec(publish(binary(), any()) -> any()).
-publish(Topic, Msg) ->
-    lists:foreach(
-        fun(#mqtt_route{topic = To, node = Node}) when Node =:= node() -> % 本节点内的订阅处理.
-            ?MODULE:dispatch(To, Msg);
-           (#mqtt_route{topic = To, node = Node}) -> % 其他节点的订阅处理.
-            rpc:cast(Node, ?MODULE, dispatch, [To, Msg])
-        end, emqttd_router:lookup(Topic)).           % emqttd_router:lookup得到的是什么？
-#+END_SRC
-我们看上面的处理，通过emqttd_router:lookup(Topic)可以从mnesia表route表的记录mqtt_route中查询知道哪些节点上有client订阅了这个topic。
-接着根据订阅是在本节点发生还是在远端节点发生做不同的处理.
-
-如果是本节点，直接调用emqttd_pubsub:dispatch(To, Msg)进行消息的分发。
-如果是远端节点，则要使用远程过程调用rpc在远端Node上执行emqttd_pubsub:dispatch(To, Msg)
-
-现在有一个问题是， 远端的客户端订阅本节点的topic之后， 本节点是怎么知道这个订阅关系的。按照集群的原理，我们知道这里面肯定包含了数据的同步。
-下面我们来看这个问题。
-
-*** 如何处理节点内或者节点间的订阅
+*** retain == true but payload == <<>>
+一类 topic 会清除 mnesia 中保存的 retained 消息.
+用 mnesia:dirty_delete(retained_message, Topic) 删除 mnesia 中的 retained topic.
 
 
-*** 有关消息分发的数据表
-    
-来看看各个表的内容和作用：
-首先我们启动了三个节点，并有如下的各种订阅关系：
+*** retain == true but payload =/= <<>>
+
+retain 消息的限制：
++BEGIN_SRC
+imit(table)   -> env(max_message_num);
+imit(payload) -> env(max_playload_size).
+
+nv(Key) ->
+   case get({retained, Key}) of
+       undefined ->
+           Env = emqttd_broker:env(retained),
+           Val = proplists:get_value(Key, Env),
+           put({retained, Key}, Val), Val;
+       Val ->
+           Val
+   end.
++END_SRC 
+表的限制主要是这个表能容纳多少消息数量, 这个由 emqttd.config 中的 broker/retained 配置决定， 下面设置最多能容纳 100000 条消息。
+
+payload 的大小限制, 一个 topic 最大的字节。
++BEGIN_SRC
+   %% Broker Options
+   {broker, [
+       %% System interval of publishing broker $SYS messages
+       {sys_interval, 60},
+
+       %% Retained messages
+       {retained, [
+           %% Expired after seconds, never expired if 0
+           {expired_after, 0},
+
+           %% Max number of retained messages
+           {max_message_num, 100000}, 
+
+           %% Max Payload Size of retained message
+           {max_playload_size, 65536}
+       ]},
++END_SRC
+
+满足对大小的限制就调用 emqttd_backend 中 retain_message 函数将该 topic 写入 mnesia。
+etain_message(Msg = #mqtt_message{topic = Topic}) ->
+   mnesia:dirty_write(#retained_message{topic = Topic, msg = Msg}).
+
+样就完成了对 retain 消息的存储了。
+
+** 消息的路由分发机制
+先， 消息经过基层发出：
+mqttd_protocol:publish ---> emqttd_session:publish ---> emqttd:publish ---> emqttd_server:publish ----> emqttd_pubsub:publish 
+
+着进入路由 route 层：
++BEGIN_SRC
+% @doc Publish message to Topic.
+spec(publish(binary(), any()) -> any()).
+ublish(Topic, Msg) ->
+   lists:foreach(
+       fun(#mqtt_route{topic = To, node = Node}) when Node =:= node() -> % 本节点内的订阅处理.
+           ?MODULE:dispatch(To, Msg);
+          (#mqtt_route{topic = To, node = Node}) -> % 其他节点的订阅处理.
+           rpc:cast(Node, ?MODULE, dispatch, [To, Msg])
+       end, emqttd_router:lookup(Topic)).           % emqttd_router:lookup 得到的是什么？
++END_SRC
+们看上面的处理，通过 emqttd_router:lookup(Topic)可以从 mnesia 表 route 表的记录 mqtt_route 中查询知道哪些节点上有 client 订阅了这个 topic。
+着根据订阅是在本节点发生还是在远端节点发生做不同的处理.
+
+果是本节点，直接调用 emqttd_pubsub:dispatch(To, Msg)进行消息的分发。
+果是远端节点，则要使用远程过程调用 rpc 在远端 Node 上执行 emqttd_pubsub:dispatch(To, Msg)
+
+在有一个问题是， 远端的客户端订阅本节点的 topic 之后， 本节点是怎么知道这个订阅关系的。按照集群的原理，我们知道这里面肯定包含了数据的同步。
+面我们来看这个问题。
+
+** 如何处理节点内或者节点间的订阅
+
+
+** 有关消息分发的数据表
+   
+看看各个表的内容和作用：
+先我们启动了三个节点，并有如下的各种订阅关系：
 | node               | client     | topic |
 |--------------------+------------+-------|
 | emqttd@127.0.0.1   | client1-1  | t/+/x |
@@ -419,70 +423,71 @@ publish(Topic, Msg) ->
 | emqttd@10.47.33.11 | client11-1 | t/+/y |
 |                    | client11-2 | a/b/c |
 
-***** route表(三个节点的route表是相同的，因此需要同步):
-记录名为mqtt_route
+**** route 表(三个节点的 route 表是相同的，因此需要同步):
+录名为 mqtt_route
 
-file:../../images/project/127_topic_route.png
+ile:../../images/project/127_topic_route.png
 
-这个表里面每个节点上订阅的topic， 如果同一个节点上有多个客户端订阅了同一个topic， 那就归在一个条目里面。
-这里在10机器上有两个客户端订阅了a/b/c，只有一个item。
+个表里面每个节点上订阅的 topic， 如果同一个节点上有多个客户端订阅了同一个 topic， 那就归在一个条目里面。
+里在 10 机器上有两个客户端订阅了 a/b/c，只有一个 item。
 
-***** trie(all same, 因此需要同步)
-这个表列出了节点树（字典数表示）, node_id是字典数上的每一个节点。
+**** trie(all same, 因此需要同步)
+个表列出了节点树（字典数表示）, node_id 是字典数上的每一个节点。
 
-file:../../images/project/127_topic_trie.png
+ile:../../images/project/127_topic_trie.png
 
-***** trie_node(all same, 因此需要同步)
-这个表列出了node_id，以及该节点下面的分支数量edge_count, 和给节点对应的订阅topic。
+**** trie_node(all same, 因此需要同步)
+个表列出了 node_id，以及该节点下面的分支数量 edge_count, 和给节点对应的订阅 topic。
 
-file:../../images/project/127_topic_trie_node.png
+ile:../../images/project/127_topic_trie_node.png
 
-***** subscription:
-这个只有本节点的订阅关系。
-列出了本节点上的clientid订阅的topic。
-在使用change_config之后，如果有的表不希望被同步，那么在创建表的时候需要使用参数{local_content,true}来指定，这样这个表就不会被同步。
+**** subscription:
+个只有本节点的订阅关系。
+出了本节点上的 clientid 订阅的 topic。
+使用 change_config 之后，如果有的表不希望被同步，那么在创建表的时候需要使用参数{local_content,true}来指定，这样这个表就不会被同步。
 
-我们找到subscription表创建的代码：
-#+BEGIN_SRC
-emqttd_server:mnesia(boot) ->
-    ok = emqttd_mnesia:create_table(subscription, [
-                {type, bag},
-                {ram_copies, [node()]},
-                {local_content, true}, %% subscription table is local, 这个表不进行同步。
-                {record_name, mqtt_subscription},
-                {attributes, record_info(fields, mqtt_subscription)}]);
-#+END_SRC
-这个是127.0.0.1上的订阅关系：
+们找到 subscription 表创建的代码：
++BEGIN_SRC
+mqttd_server:mnesia(boot) ->
+   ok = emqttd_mnesia:create_table(subscription, [
+               {type, bag},
+               {ram_copies, [node()]},
+               {local_content, true}, %% subscription table is local, 这个表不进行同步。
+               {record_name, mqtt_subscription},
+               {attributes, record_info(fields, mqtt_subscription)}]);
++END_SRC
+个是 127.0.0.1 上的订阅关系：
 
-file:../../images/project/127_topic_subscription.png
+ile:../../images/project/127_topic_subscription.png
 
-这是10.47.33.10上的订阅关系：
+是 10.47.33.10 上的订阅关系：
 
-file:../../images/project/10_topic_subscription.png
+ile:../../images/project/10_topic_subscription.png
 
-这是10.47.33.11上的订阅关系：
+是 10.47.33.11 上的订阅关系：
 
-file:../../images/project/11_topic_subscription.png
+ile:../../images/project/11_topic_subscription.png
 
-***** session 
-这个表也是被同步的。
+**** session 
+个表也是被同步的。
 
 
-*** emqttd集群应该注意的问题 
-**** 创建集群的顺序
+** emqttd 集群应该注意的问题 
+*** 创建集群的顺序
 
-在建立集群的时候需要delete_schema，这个过程会把数据也一起删掉，这样丢失数据是不恰当的啊。该怎么处理？
+建立集群的时候需要 delete_schema，这个过程会把数据也一起删掉，这样丢失数据是不恰当的啊。该怎么处理？
 
-emqttd的例子里面就只说明了两个node的集群布置，所以我就以为可以在同一台机器上执行cluster join，这样就会出现上面的疑问了。
-这是思考方式出了问题。
+mqttd 的例子里面就只说明了两个 node 的集群布置，所以我就以为可以在同一台机器上执行 cluster join，这样就会出现上面的疑问了。
+是思考方式出了问题。
 
-我们需要知道的是建立集群的时候会把schema删除掉，但是只是把执行join的那台机器上schema和数据清除掉，join的那台机器并没有被
-清除，所以如果要加一台机器，那就应该在这台新机器上执行join。所以集群的布置顺序应该是新node和与旧node相连。
+们需要知道的是建立集群的时候会把 schema 删除掉，但是只是把执行 join 的那台机器上 schema 和数据清除掉，join 的那台机器并没有被
+除，所以如果要加一台机器，那就应该在这台新机器上执行 join。所以集群的布置顺序应该是新 node 和与旧 node 相连。
 
-**** 进程池设置
-进程池的名字不能一样，因为我们的进程池是global的，那样同样的名字就会在全局出现重复,最后导致失败。
+*** 进程池设置
+进程池的名字不能一样，因为我们的进程池是 global 的，那样同样的名字就会在全局出现重复,最后导致失败。
 
-**** 使用haproxy进行负载均衡
+*** 使用 haproxy 进行负载均衡
+*首先要确保使用到的机器端口对外开放* 。
 eg:
 #+BEGIN_SRC
 listen mqtt-tcp
@@ -490,6 +495,49 @@ listen mqtt-tcp
   mode tcp
   option tcplog
   balance roundrobin                 %% 均衡算法(方式)
-  server emqttd1 192.168.33.12:1883  %% 第一台emqttd服务器
-  server emqttd2 192.168.33.16:1883  %% 第二台emqttd服务器
+  server emqttd1 192.168.33.12:1883  %% 第一台 emqttd 服务器
+  server emqttd2 192.168.33.16:1883  %% 第二台 emqttd 服务器
 #+END_SRC 
+
+* 使用集群带来单节点不存在的问题
+** 数据共享问题
+单节点中，ets 在整个节点间共享，但是使用集群，这个就没法共享。对 ets 使用的就会有问题。
+之前的设备在线统计放在 ets 中就出现问题了，目前还有 topic 持久化的上次写入时间也是放在 ets 里面的。
+
+** 通过一个 clientid 在不同节点登陆
+关于 emqttd 的 session 的详细解释在另一篇文中 /session/ 中有详细解释。 
+
+经测试如果使用两个节点，上次在 node1 登陆，下一次在 node2 登陆，依然会把 node1 上的这个 clientid 踢掉。
+也就是说在集群里面 cientid 是不能一样的，如果一样就会把之前的踢掉。   
+
+在 session 那篇文中，我们已经知道 session 的信息保存在 mnesia 的 ram_copies 表中，而注册信息保存在 ets 中，
+client 的注册信息也是放在 ets 中的, 这个注册信息是否存在就决定了 client 是否还在线。我们分析一些单节点
+和集群中的相同 clientid 踢掉的过程。
+
+client 连接，首先进行认证，通过认证之后接着启动 session，完成 session 的启动之后，才将 client 注册到
+ets 表中, 在代码中我们看到连接的过程，即时 clientid 相同，也不会手动去删除 ets 的注册信息，只有 client_pid
+进程终止之后才会将 ets 中的注册信息删除。
+
+单节点中 client1 连接后，通过认证，建立了 session(将 session 注册在 ets，信息保存在 ram_copies 中),注册
+client 在 ets 中。如果是 clean_session=true，这时候同样 clientid 的客户端又连接进来了，首先要做的是创建
+session，他首先要利用 clientid 去查询 session，如果有，他要先销毁 session 的 ets 和 mnesia 的信息，这时候
+SessPid 必然就被杀死了，SessPid 被杀死，就会发消息给 client_pid,进一步杀死 client_pid,删除 ets 的注册信
+息。如果是 clean_session=false，那就重用 session，session 在 mnesia 和 ets 中的信息都不必要任何处理，如果 
+clientid 在 ets 中的注册信息没在，那就插入，如果在，那就不用处理了。
+
+集群中，如果 client1 在 node1 上登陆(首次登陆)，ets 和 mnesia 的信息都在 node1 上家里，但是 mnesia 中的信息
+会被同步到其他节点。如果新的 client 带着这个 clientid 连接到 node2 上。如果是暂态的 session 连接，他会清除
+node1 上关于这个 clientid 的所有信息，然后在 node2 上重建和注册。如果是永久的 session，他会重用 node1 上的
+session(session 在 ets 和 mnesia 的信息都会保存在 node1 上)，但是 client 会在 node2 上注册。这样就出现client 注册
+地和session不在一个节点上的情况了。
+
+ets中的 *注册信息* (不管是client还是session)都是值保存了本节点的信息，不会同步其他节点的信息。
+
+
+
+
+emqttd消息服务器集群模式下，MQTT连接的持久会话(session)跨界点。
+
+例如，负载均衡的两台集群节点node1和node2，同一MQTT客户端先连接node1，node1会话会创建持久会话；
+客户端断线重连到node2上，持久会话仍旧在node1上。
+

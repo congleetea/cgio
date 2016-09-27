@@ -1,6 +1,6 @@
 #+TITLE: 2016-06-02-EMQTTD_ratelimit
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Thursday, June  2 2016 
 #+OPTIONS: ^:nil
 
@@ -75,10 +75,10 @@ new(Capacity, Rate) when Capacity > Rate andalso Rate > 0 ->
 #+END_SRC
 
 上面的#bucket 里面四个量：
-| capacity  | bucket的容量， 可容纳的包的byte数, 就是我们设置的100KB， 即1024X100=120400Byte |
-| remaining | 接收完这个包之后剩余的容量                                                     |
-| limitrate | emqttd.config里面设置的流控Rate(KB), 除1000(1024大概)变成Byte/sec              |
-| lastime   | 上次接收包的时间(ms)                                                           |
+| capacity  | bucket的容量，可容纳的包的最大byte数, 就是我们设置的100KB， 即1024X100=120400Byte |
+| remaining | 接收完这个包之后剩余的容量(Byte)                                                  |
+| limitrate | emqttd.config里面设置的流控Rate(已经转换为Byte/Sec), 除1000变成Byte/millsec       |
+| lastime   | 上次接收包的时间(ms)                                                              |
 
 下面是实现：
 
@@ -96,7 +96,7 @@ check(Bytes, {?MODULE, [Bucket = #bucket{capacity = Capacity, remaining = Remain
         true  -> %% Tokens available
             {0, Bucket#bucket{remaining = Tokens - Bytes, lastime = now_ms()}};
         false -> %% Tokens not enough
-            Pause = round((Bytes - Tokens)/Rate),
+            Pause = round((Bytes - Tokens)/Rate),   %% 单位ms
             {Pause, Bucket#bucket{remaining = 0, lastime = now_ms() + Pause}}
     end,
     {Pause1, {?MODULE, [NewBucket]}}.

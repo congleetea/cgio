@@ -1,0 +1,40 @@
+#+TITLE: 2015-01-01-ERLNG_install-erlang.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  congleetea@gmail.com
+#+DATE:  Friday, June 17 2016 
+#+OPTIONS: ^:nil
+
+** erlang及man文件安装
+   
+*** uninstall erlang
+| 卸载已有的erlang,apt-get remove |
+| 删除/usr/local/lib/erlang       |
+
+*** install deps
+| sudo apt-get update                                                              |
+| sudo apt-get install build-essential                                             |
+| sudo apt-get -y install autoconf                                                 |
+| sudo apt-get -y install m4                                                       |
+| sudo apt-get -y install libncurses5-dev                                          |
+| sudo apt-get -y install libwxgtk2.8-dev libgl1-mesa-dev libglu1-mesa-dev libpng3 |
+| sudo apt-get -y install libssh-dev                                               |
+| sudo apt-get -y install unixodbc-dev                                             |
+
+*** install erlang 
+| $ wget http://www.erlang.org/download/otp_src_18.3.tar.gz |
+| $ tar zxvf otp_src_18.3.tar.gz                            |
+| $ ./configure && make && sudo make install                |
+| $ erl                                                     |
+
+安装带dtrace的opt：
+| sudo apt-get install systemtap systemtap-sdt-devel |
+| cd opt_src_18.3 && ./otp_build autoconf            |
+| ./configure --with-dynamic-trace=systemtap         |
+| make && sudo make install                          |
+erl启动之后看到会有[systemtap]，就说明dtrace功能已经启用了。
+*** install man files
+| tar zxvf otp_doc_man_18.3.tar.gz                                |
+| sudo cp -r man /usr/local/lib/erlang/ 这个路径要和emacs中一致。 |
+
+
+

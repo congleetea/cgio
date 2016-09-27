@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # File: deploy_a_replica_set_in_one_machine.sh
-# Author: Xuancong Lee[congleetea] <lixuancong@molmc.com>
+# Author: Xuancong Lee[congleetea] <congleetea@gmail.com>
 # Created: Wednesday, June 22 2016
 #
 

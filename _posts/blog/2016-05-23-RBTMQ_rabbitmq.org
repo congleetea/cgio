@@ -1,6 +1,6 @@
 #+TITLE: 2016-05-23-RBTMQ_rabbitmq.org
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Monday, May 23 2016 
 #+OPTIONS: ^:nil
 

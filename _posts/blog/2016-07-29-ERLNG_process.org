@@ -1,0 +1,128 @@
+#+TITLE: 2016-07-29-ERLNG_process.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Friday, July 29 2016 
+#+OPTIONS: ^:nil
+
+* 一些概念
+** 系统，虚拟机，进程关系
+   Erlang虚拟机是 *运行在操作系统中的一个多线程进程* 。Linux下，用POSIX线程库(pthread)实
+现，多线程共享进程(VM)的内存空间。一般每个核心有一个调度器(线程)，调度器运行两种作业:进
+程作业和port(IO)作业每个调度器有一个run queue，里面包含四种优先级的任务队列, 调度器根据
+优先级来执行。
+
+虚拟机 -> 调度器(线程) -> 调度器运行两个作业.
+
+** reduction和trap机制(针对BIF)、抢占式preemption调度
+每一个进程都会获取相同的reduction(默认2000)，一个reduction大概等价于一个函数调用，也就是
+说大概一个函数调用消耗一个reduction，系统会给进程的reduction进行计数，当reduction消耗完
+之后(不管这个进程的任务是否完成)或者进程进入了等待状态，都会被重新推到run queue中，(即抢
+占式preemption调度)等待下次调度再继续执行。
+
+系统中的任何操作都要消耗reduction。这些操作包括循环中的函数调用、BIF（内建函数）的调用、
+进程中堆的垃圾回收、存取ETS和发送消息等（发送消息要考虑接收者的邮箱大小，邮箱越大发送的
+代价越高）。顺便提一下，会扣除reduction的地方遍及整个Erlang系统。比如Erlang的正则表达式
+库就做了修改，即使这个库是用C语言编写的，其中也添加了扣除reduction的相关代码。因此如果你
+有一个非常耗时的正则表达式，那么这个正则表达式的操作也会扣除reduction，所以在运行的过程
+中有可能会被抢占好几次。port也不例外！在一个port上执行I/O操作会消耗reduction，发送分布式
+消息也会消耗reduction，不胜枚举。开发者花了大量时间确保系统中产生的每一步进度都会消耗
+reduction。
+
+这里有两个疑问，一个是reduction大概等价于一个函数调用，那么它所代表的时间是否是相同的呢？
+[[本文]] 中给出的说明是：因为每个函数调用可能消耗不同的时间，所以不同的reduction的真是时间是不
+一样的，也就是说reduction并不是对应一次完整的函数调用完成。另外一个疑问就是一个耗时的操作, 
+执行过程中让出CPU时间片之后再次被调度执行时，reduction会不会变化。
+
+from 褚霸：
+
+公平调度实际上有三部分：
+
+1 erlang函数的调用，由于erlang的代码翻译成opcode，有虚拟机执行，所以一次完整的函数调用为一
+个reduction。因为erlang的函数通常都是递归执行的，所以函数体一般很小。
+
+2 BIF的trap机制。简单的说就是BIF会执行到大概几个reduction这样的时间片之后自动放弃执行，把
+当前的执行情况记录下来，然后退出。等下次调度再执行的时候，会继续之前的位置往下。
+
+3 IO的调度，IO调度也是公平的，把IO的处理量算成reduction，算在寄主进程的时间片里面。
+
+    这里提到了trap机制，erlang的trap机制在实现中用的很多，在费时的BIF操作中基本都可以看到。
+它的实现需要erl vm的配合。他的作用基本有三个：
+
+1 把费时操作分阶段做。由于erlang是个软实时系统，一个进程或者BIF不能无限制的占用CPU时间。所
+以erlang的每个进程执行的时候，最多只能执行一定数量的指令.这个是设计方面的目标。实现上也要配
+套。所以比如md5,lists:member查找这种可能耗时的操作都是用trap机制来实现的，也就是说当进程调度
+到的时候执行一定数量的计算然后把上下文trap起来放弃执行等待下一次的调度来继续计算。 
+
+2 延迟执行，实现上层的决策。 明显的例子是send操作。 send的时候,节点间可能未连接，所以这个
+send的操作不能继续，(其实就是进程在等待状态了), 先trap, 然后在下一次的调度的时候执行节点连接
+操作，一旦成功send操作就继续往下执行。对客户来讲这个操作是透明的。他不知道你幕后的这些事情。 
+
+3 主动放弃CPU yield.  
+
+   综上其实就是要保证真正的公平调度所有进程，不要使有的进程一直得不到执行的情况出现, 特别是
+erlang这种拥有如此多的进程的情况。
+
+** 进程调度中的优先级问题
+前面讲了一个调度器的run queue包含四种权限的队列. pocess在相同的权限队列使用的是Round-robin 
+order 调度算法。这个算法分配相等的时间片(一定数量的reduction)给每一个进程，并且每一个process
+有同样的权限去执行。调度器先把maxinum权限队列的进程执行完，然后是high权限队列，然后是normal+
+low队列。
+
+** 调度器的迁移
+平衡负载以及关闭不必要的调度器或核心。
+
+[[../../images/blog/schedule_queue.png]]
+
+[[../../images/blog/schedule_migrate.png]]
+
+每过一段时间，调度器就会通过一个非常复杂的过程在调度器之间迁移一些进程。这种启发式迁移的目标
+就是为了 *平衡多个调度器的负载* ，使得所有的核心都能得到充分的利用。这个平衡算法还要考虑工作
+量是否足够大， *是否大到需要启动一些新的调度器* 。如果没那么大的话，那么最好让那些调度器保持
+关闭状态，因为反正那些线程也没有工作可做。关闭调度器意味着处理器核心可以进入节能状态，甚至关
+闭核心。没错，Erlang会尽可能地节省电源消耗。如果调度器做完了工作，还会从其他调度器“窃取”工作
+（work-steal）。
+
+** 异步线程池
+   [[http://mryufeng.iteye.com/blog/285749][Async线程pool及其作用]]
+   
+   erlang能够利用多核心cpu的基础设施有2个: 进程调度器;  async 线程池。 
+
+   其中async线程池主要设计用来能够在driver里面异步的执行费时操作，因为driver是在调度器里面调
+用的不过费时操作的话会block掉整个调度器而且调度器资源有限。 
+   驱动程序可以通过异步线程池中的线程执行阻塞的操作，这样调度器可以在线程池中有些线程阻塞的
+情况下依然执行其他有用的工作。最值得注意的是，文件驱动程序通过线程池加速文件I/O，而网络
+I/O则没有使用线程池。
+
+   其中erlang自己的file driver就大量依赖于异步线程池 所以如果文件操作密集型的程序可以考虑加大
+池的数量。erl有2个参数和这个池有关： 
+| +a: 大量池的时候 要考虑栈内存的影响缩小这个值 |
+| +A: 设置异步线程池中的线程个数，有效值0~1024. |
+
+为什么在线程池大的时候需要调小+a参数呢？ 因为这些异步线程本来就是耗时的操作，常常有可能会阻塞，
+如果不限制栈的内存大小，就有可能会飞快的将内存耗尽，导致系统崩溃。因此需要将这个调小，使其不至
+于将内存耗尽。
+
+* 进程调度算法
+[[../../images/blog/erlang_schedule.png]]
+
+
+* Erlang的软实时、低延迟
+** preemption multitasking 和 coopreative multitasking
+Preemption(抢占)是计算机系统中不需要请求协同就暂时打断正在执行的任务的一种行为, 然后稍后在恢复
+这个被打断的任务。
+
+   
+
+
+
+
+
+
+* references
+| [[http://fengchj.com/?p=2255][Erlang运行时之进程]]                  |
+| [[http://www.cnblogs.com/me-sa/archive/2011/11/06/erlang0013.html][抓取Erlang进程运行时信息]]            |
+| [[http://jzhihui.iteye.com/blog/1482175][Erlang并发机制-进程调度]]             |
+| [[http://mryufeng.javaeye.com/blog/334744][Erlang ERTS的Trap机制的设计及其用途]] |
+| [[http://www.cnblogs.com/zhengsyao/p/how_erlang_does_scheduling_translation.html][Erlang 的调度原理(译)]] [[http://jlouisramblings.blogspot.com/2013/01/how-erlang-does-scheduling.html][原文]]          |
+| [[https://en.wikipedia.org/wiki/Preemption_(computing)][wiki:Preemption]]                     |
+| [[https://en.wikipedia.org/wiki/Cooperative_multitasking][wiki:copreative multitasking]]        |

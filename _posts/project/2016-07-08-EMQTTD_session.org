@@ -1,6 +1,6 @@
 #+TITLE: 2016-07-08-EMQTTD_session.org
 #+AUTHOR: Xuancong Lee
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Friday, July  8 2016
 #+OPTIONS: ^:nil
 

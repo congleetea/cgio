@@ -1,0 +1,197 @@
+#+TITLE: 2016-08-08-EMQTTD_emqttd.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Monday, August  8 2016 
+#+OPTIONS: ^:nil
+
+* FAQ 
+** 为什么是先启动mnesia，在启动emqttd_sup？
+先要知道启动emqttd_mnesia:start/0中做了什么操作，有一下操作：
+| mnesia:system_info(directory)查询是否设置了相应的mnesia路径, 如果没有会创建它. |
+| mnesia:create_schema([node()])创建disc的模式，如果已存在就不会创建了.          |
+| mnesia:start()启动mnesia运用。                                                 |
+| mnesia:create_table(Name, TabDef)创建表，将表的record信息写进schema中          |
+| mnesia:add_table_copy(Name, node(), RamOrDisc)复制表的副本                     |
+| mnesia:wait_for_tables(mnesia:system_info(local_tables), 600000)复制本地表.    |
+之所以数据库要在前面启动因为，其他的服务启动之后可能会立刻就要使用mnesia，所以要先启动mnesia，准备给
+后面启动的服务.
+
+启动mnesia并进行完相关初始化之后，启动根监督树emqttd_sup，然后在跟监督树下面启动各类服务和各层监督者。
+
+监督树是one_for_one的，根监督树一般都是这个，因为根监督树下面通常进程不是同类的，而且要使用start_child 
+启动。
+
+** 一个客户端连接占用几个进程
+如果是mqtt(s)则每个客户端占用两个进程：
+| esockd_connection_sup下的connection. |
+| emqttd_session_sup下面的进程session. |
+最后mqtt数据接受在emqttd_client中的handle_info({inet_async,....}, State)中处理
+
+如果是websocket连接则每个客户端占用三个进程：
+| mochiweb_http:init(由spawn_link启动,作为esockd_connection_sup的子进程connection,socket的控制权是转到这里的), 这个和emqttd_http关系密切. |
+| emqttd_ws_client:init(作为emqttd_ws_client_sup的子进程)                                                                                 |
+| emqttd_session_sup下的子进程.                                                                                                           |
+后两个进程是link的，只要其中一个挂掉，另一个也就挂掉了。
+最后websocket的数据就在emqttd_ws中ws_loop(Data, State)接收处理, 但是接受完之后使用handle_cast发送给emqttd_ws_client的进程处理.
+
+控制权的转交：
+对于mqtt连接，控制权由acceptor转交给connection(或者ClientPid); 对于websocket连接，控制权有acceptor转交给mochiweb_http, mochiweb_http处理之后
+再用gen_server:cast发送给进程ClientPid，有ClientPid的handle_cast处理. 
+
+综上，我们在研究broker的数据流时就可以从两个地方开始研究：emqttd_client(for mqtt/mqtts)和emqttd_ws_client(websocket/websockets)
+
+websocket 通过http 建立连接之后就在mochiweb_websocket:loop中去循环接受数据了, 解析之后执行emqttd_ws:loop的回调进行解析，得到一个完整的数据包之后再把packet
+用handle_cast发送给ClientPid进程处理。
+
+** 如何区分当前运行的是那个进程？
+如果只是单纯的函数调用，不管跨过了几个模块，它仍然还属于同一个进程。除非出现了消息的发送，有另一边(林一个进程)接受处理，这时候就在另一个进程里面了。
+如果是启动进程，那么在启动产生新的Pid之前，都还属父进程。在esockd中listener_sup,listener,acceptor_sup,acceptor, connection_sup,connnection这几个进程
+的节点一定要分清。比如acceptor进程可能已经调用了好几个模块的函数，单仍旧还是acceptor进程，除非出现了消息发送，或者start_link之类产生了新的进程。
+   
+** 看代码的一些建议
+*** 子句的顺序
+在看代码的时候，字句的顺序有时候和逻辑是相关的，因为erlang在匹配字句的时候，如果匹配到前面的字句，就不会在继续匹配后面的字句了。
+因此，顺序就决定了会执行什么代码, 也就决定了相应的逻辑。最明显的是emqttd中parse的时候字句的匹配决定包时候还要继续解析；还有emqttd_client.erl中的run_socket函数。
+
+* emqttd运用的启动
+#+BEGIN_SRC
+start(_StartType, _StartArgs) ->
+    print_banner(),
+    emqttd_mnesia:start(),                      % 启动mnesia，并初始化
+    {ok, Sup} = emqttd_sup:start_link(),        % 启动根监督树one_for_one类型
+    start_servers(Sup),                         % 启动根监督树下面的各个服务
+    emqttd_cli:load(),                          % 将emqttd_ctl 的命令注册到ets中
+    load_all_mods(),                            % 将配置文件中modules中的各个模块load起来，主要是hook相关的模块
+    emqttd_plugins:load(),                      % 启动load_plugins中的插件app, 并读取相应的配置文件内容通过application:set_env/3设置插件的环境变量.
+    start_listeners(),                          % 读取处listener和相应的配置，三元组{Protocol, Port, Opts}然后启动这个相应的listener，如mqtt，mqtts，http等
+    register(emqttd, self()),                   % 注册当前进程为进程名emqttd.
+    print_vsn(),                                % 至此运用emqttd就启动完成了.
+    {ok, Sup}.
+#+END_SRC
+  
+* emqttd的pool有哪些？各有什么作用？如何使用？
+| Workers/Type    | Pool      | Supervisor                        | For |
+|-----------------+-----------+-----------------------------------+-----|
+| emqttd_pooler_N | pooler    | pooler_pool_sup                   |     |
+| emqttd_cm_pool  | emqttd_cm | emqttd_cm_pool_sup                |     |
+| emqttd_sm_N     | emqttd_sm | emqttd_sm_pool_sup                |     |
+| emqttd_server_N |           | emqttd_pubsub_sup/server_pool_sup |     |
+| emqttd_pubsub_N | pubsub    | emqttd_pubsub_sup/pubsub_pool_sup |     |
+** gproc_pool使用
+| gproc_pool:new(Pool, Type, Opts)            | Opts为[{size,Size}]或者[{auto_size,bool}]  |
+| gproc_pool:add_worker(Pool, Name, Slot)     | Name是worker在pool中的名字，不是进程注册名 |
+| gproc_pool:connect_worker(Pool, {Pool, Id}) | 将当前进程和pool中的{Pool,Id}连接起来      |
+| gproc_pool:pick_worker(POOL, ClientId),     | 选取一个进程来执行任务.                    |
+
+* esockd
+[[../../images/project/esockd.png]]
+
+进程esockd_sup就是根监督者，它在启动的时候同时启动了子进程esockd_server，从图中我们可以看到另外还有四个子进程，
+这四个子进程是通过esockd_listener_sup:start_link来启动的listener_sup，我们使用了mqtt/1883，mqtts/8883，http/8083
+和http/18083这四个listener，也就是上面者四个进程。
+
+接着再看看esockd_listener_sup(rest_for_one)下面各自有三个进程，从代码中我们知道esockd_connection_sup, esockd_acceptor_sup 
+和esockd_listener 这三类子进程。
+
+我们看298(esockd_listener_sup)这个进程，子进程中299(esockd_connect_sup)后面还有一个子进程441(esockd_connect)，这个是
+我们的客户端连接，现在只有一个客户端连接，所以只有一个，(有多少连接就会有多少个，这就是客户端连接之后占用两个进程
+中的一个); 子进程300(esockd_acceptor_sup)启动的，后面有16个子进程(esockd_acceptor);还有一个子进程301(esockd_listener)，
+这就是监听端口进程, 其socket是{active,false}，即被动接收的，不会主动接收连接。
+
+441这个进程是esockd_connection这个进程，他里面调用了emqttd_client:start_link(mqtt/mqtts)或者mochiweb_http:start_link(http/https)，
+所以你在emqttd_client或者mochiweb_http中打印处self()发现，他们是一个Pid。
+
+* emqttd功能笔记
+** 连接层
+所有listener最终都调用了esockd:open函数来启动：
+open(Protocol, Port, Options, MFArgs)
+对于mqtt(s)连接，MFArgs为MFArgs = {emqttd_client, start_link, [emqttd:env(mqtt)]},
+对于http(s)连接，MFArgs为MFArgs = {mochiweb_http, start_link, [{emqttd_http, handle_request, []}]}
+注意在MFArgs中，的Args里面，对于mqtt连接就只有mqtt的配置，而http的则是嵌套的一个MFA。每一个MFA都会启动一个进程，因此mqtt(s)只有一个MFA，
+在连接层就只会启动一个进程，而http(s)则会启动两个进程。 
+
+启动listener时，启动顺序是listener_sup, connection_sup, acceptor_sup, listener, 然后再有listener调用acceptor_sup启动acceptor， acceptor
+捕捉到连接之后调用connection_sup启动connection(对于mqtt，这个进程就是ClientPid,对于http，这个connection进程只是处理http相关的，对http进行
+相应的处理之后再产生ClientPid进程处理Mqtt数据.)
+
+*** websocket 
+请求方会在协议头中带Upgrade 
+
+如果 websocket 设置了 /secure/， 那么客户端和服务器建立连接之后，必须先进性TLS握手，TLS握手成功之后才可以进行websocket的握手。如果 
+TLS 握手失败（比如服务端证书不能通过验证），那么客户端必须关闭连接，终止其后的 WebSocket 握手。在 TLS 握手成功后，所有和服务的数据交换
+（包括 WebSocket 握手），都必须建立在 TLS 的加密隧道上。
+
+成功握手确立websocket连接之后，通信是不再使用http的数据帧，而采用websocket独立的数据帧.
+websocket和http的关系只在最初建立socket连接和最后关闭连接时使用http进行解释，其他时刻和http是平级的，没有关系。
+
+** 数据包的解析
+在emqttd_client.erl中初始化的时候引入parse函数并保存在#client_state{}中，接受到数据之后就会使用该函数进行解析，
+在解析的过程中, 要考虑的情况是接收的数据可能不是一个完整的包，在数据发送较快的时候很少会是一个完整的数据包，也就 
+是处理半包或者粘包。
+
+第一个包一定是一个起始正确的包，也就是可以解析出固定报头. 先解析处固定报头，里面包含Type，Qos, dup, retain 和剩余长度。
+
+根据剩余长度Len，我们可以从剩下的二进制数据里面截取出Len长度的数据，这部分就是完整的可变报头和有效负载部分。如果取出Len
+长度还有剩余，那就是下一个packet的开头部分，我们下一次处理。当然也有可能剩下的长度没有Len，那就说明这个包不是完整的，还
+有一部分没有接收过来，这样就再次接收之后在处理。
+
+在处理可变报头和有效负载的时候就按照协议的规定解析就可以，里面主要使用的是位串的使用。
+
+处理的步骤：
+
+1) 首先接受到数据，初始使用的解析函数是parse/2，如果得到数据为<<>>, 那么返回parse/2函数，继续接收数据再处理。
+如果得到的数据不是<<>>，那至少有一个字节，可以从第一个字节把Type，Qos，Dup, Retain解析出来，然后执行parse_remaining_len/3;
+
+2) 如果parse_remaining_len/3处理的是<<>>，这说明处理完固定报头第一个字节 *或者* 处理了剩余长度的某个字节之后(但是可以确定剩余
+长度一定没有处理完，因为处理完之后就执行parse_frame函数，返回的也就是parse_frame函数了) 就没数据了，那就返回parse_remaining_len/3, 
+继续接受数据再处理。处理完剩余长度的标志是处理的字节首位是0，这就说明处理完剩余长度了。
+
+3) 接着处理parse_frame/3处理可变报头和有效载荷了，这个根据类型和数据Bin来进行匹配，首先从数据中取出剩余长度Len的内容，这部分就是 
+这个包完整的可变报头和有效载荷接下来就对这部分就行处理，但是也有可能去不出Len的数据，那就说明这个包的某些数据还没有读取来，那就 
+匹配parse_frame的最后一个guide: {_, TooShortBin}, 然后返回parse_frame/3，继续接受再处理。
+
+4) 处理完之后组合成一个#mqtt_packet记录，和Rest剩余的数据(这个是写一个包的前面部分), 然后循环接受再处理.
+
+** 数据包的序列化
+序列化就是将一个消息按照mqtt协议封装成mqtt包，通过socket发送到相应的客户端。   
+
+序列化的过程是先进行payload的封装，然后是可变报头的封装，最后计算出两部分的长度和，封装固定报头.
+
+** 发布订阅流程 
+发布和订阅的流程是emqttd最重要的逻辑, 比较难理解的主要有两部分，一个是qos=1/2的消息处理，这里设计了飞行消息和离线消息的处理;二是 
+消息路由的设计。
+
+** 集群设计和实现
+集群之间要能通信，首先要使用相同的cookie，这样可以防止被第三方加入。只要cookie相同，连个节点只要和对方建立连接，之后就会自动检测
+对方，也就算加入集群了。但是测试mnesia并没有加入集群，为了同步一些消息，还要将mnesia加入集群。emqttd的cookie是在vm.args中设置的。
+
+如何定位其他节点并与之建立联系呢？ 节点在启动的时候，会检测当前是否运行一个名为EPMD(Erlang Port Mapper Daemon)的进程, 如果没有就会
+启动它。这个进程会追踪在本地机器上运行的所有erlang节点，并记录分配给他们的端口。当一台机器上的Erlang节点试图与某远程节点通信时，本地
+的EPMD就会联络远程机器上的EPMD(默认使用TCP/IP，端口4369)，询问在远程机器上有没有叫相应名字的节点，如果有，远程的EPMD就会回复一个端口号，
+通过该端口号就可以直接与远程节点通信。不过EPMD不会自动去搜寻其他EPMD，只有在某个节点主动搜寻其他节点的时候才能建立。
+
+在emqttd中，通过./emqttd_ctl cluster join Node  , emqttd_cli.erl中的函数会根据命令和参数执行集群的join工作。emqttd的集群主要有一些几个
+步骤：
+|            | 说明                                                                                                                                                       |
+|------------+------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 确保条件 | 确保本节点和远程节点符合加入集群的条件，该步骤通过rpc(使用EPMD)建立通信，此步就成为了集群.                                                                 |
+| stop       | 先stop emqttd依赖的app，然后stop emqttd.                                                                                                                   |
+| 同步mnesia | 1) 确保关闭mnesia, 这一步必须在emqttd stop之后才能执行，否则导致运用崩溃.                                                                                  |
+|            | 2) 删除本节点的schema, 这一步必须在mnesia关闭之后才能执行，否则不会成功, 这一步成功之后， data/mnesia/Node/下面的内容就会被删除.                           |
+|            | 3) 确保mnesia启动.                                                                                                                                         |
+|            | 4) 使用 mnesia:change_config(extra_db_nodes, [Node])建立mnesia连接到Node. 这一步完成之后会从Node上把数据库复制过来，但是复制过来在本节点上是ram_copies的。 |
+|            | 5) 使用 mnesia:change_table_copy_type(schema, Node, disc_copies) 这一步将本节点Node上的表schema由ram_copies类型变为disc_copies类型。                       |
+|            | 6) 对具有属性mnesia(copy)的模块执行mnesia:add_table_copy(Name, node(), RamOrDisc)复制相应的mneisa表.                                                       |
+| reboot     | 重启emqttd的依赖项和emqttd. 集群建立结束                                                                                                                   |
+
+某个在集群中的节点也可以脱离集群(leave)，也可以通过某一个节点删除集群中的另外一个节点(remove)，指的注意的是不管是 leave 还是 remove，
+实现的都是 mnesia 取消同步，节点依然还显示在集群中, 因为前面已经说了，(cookie相同的时候)只要检测到对方,对方节点没有终止， 就会一直跟踪
+对方, 除非节点重新启动, 这样就需要重新建立联系才会在进行跟踪。
+
+emqttd中同步的mnesia数据表：route，trie, trie_node.
+
+** hook工作原理
+hook是在emqttd中工作的某个节点设置一个标志(即hook)，当执行到这里的时候就会去执行关联的回调函数。
+
+首先要注册hook，注册hook其实就是调用emqttd:load在ets表中插入hook名和对应的回调函数列表。这样在设置hook的节点处执行emqttd_hook:run的时候就会去查询有哪些回调需要执行， 然后相继执行回调即可。
+

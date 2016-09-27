@@ -1,20 +1,21 @@
 #+TITLE: 2016-05-18-ERLND_rebar_release.org
 #+AUTHOR: Xuancong Lee
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Wednesday, May 18 2016
 #+OPTIONS: ^:nil
 
 使用rebar来进行erlang的app管理.
 官方的资料: https://github.com/rebar/rebar/wiki
 
-*** rebar and OTP conventions
-**** 目录结构:
-     | src     |
-     | ebin    |
-     | prib    |
-     | include |
+* rebar and OTP conventions
+** 目录结构:
+   | src     |
+   | ebin    |
+   | prib    |
+   | include |
 
-**** rebar惯例
+** rebar惯例
+
 | Mode         | 说明                                                                                                                                           |
 |--------------+------------------------------------------------------------------------------------------------------------------------------------------------|
 | Tests        | rebar检查是否有test目录作为 [[http://erlang.org/doc/man/eunit.html][EUnit]] 的源文件路径.                                                                                                |
@@ -23,132 +24,138 @@
 |--------------+------------------------------------------------------------------------------------------------------------------------------------------------|
 | release      | 包含reltool.config文件的目录, 根据这个配置文件来构建 Erlang app 的release,reltool.config这个文件是通过rebar的命令: rebar create-node 来产生的. |
 
-*** Rebar 命令
-[[https://github.com/rebar/rebar/wiki/Rebar-commands][rebar的常用命令]] 这里就不详述了, 需要的自行查看即可.
-**** 列出几种常用的的源码格式, 通过编译命令 compile 之后的位置和文件:
+* Rebar 命令
+https://github.com/rebar/rebar/wiki/Rebar-commands][rebar的常用命令]] 这里就不详述了, 需要的自行查看即可.
+** 列出几种常用的的源码格式, 通过编译命令 compile 之后的位置和文件:
 
-| Source        | Target          | Description                                    |
-|---------------+-----------------+------------------------------------------------|
-| src/*.erl     | ebin/*.beam     | Erlang source files                            |
-| src/*.app.src | ebin/*.app      | Erlang application specification               |
-| c_src/*.c     | priv/<app>.so   | C code for a port driver or NIF shared library |
-| mibs/*.mib    | priv/mibs/*.bin | SNMP mib files                                 |
-| src/*.xrl     | src/*.erl       | Leex analyzer generator files                  |
+|Source        | Target          | Description                                    |
+|--------------+-----------------+------------------------------------------------|
+|src/*.erl     | ebin/*.beam     | Erlang source files                            |
+|src/*.app.src | ebin/*.app      | Erlang application specification               |
+|c_src/*.c     | priv/<app>.so   | C code for a port driver or NIF shared library |
+|mibs/*.mib    | priv/mibs/*.bin | SNMP mib files                                 |
+|src/*.xrl     | src/*.erl       | Leex analyzer generator files                  |
 
-**** rebar.config 中定义的命令选项
-参考:[[https://github.com/rebar/rebar/wiki/Rebar-commands][Rebar Options]]
+** rebar.config 中定义的命令选项
+考:[[https://github.com/rebar/rebar/wiki/Rebar-commands][Rebar Options]]
 
-| args            | Command              | 说明                               |
-|-----------------+----------------------+------------------------------------|
-| erl_opts        | compile              | compile模块支持的选项,参考[[http://www.erlang.org/doc/man/compile.html][here]]     |
-| erl_first_files | compile              | 应该在其他模块之前进行编译的模块   |
-| clean_files     | clean                | clean命令删除的文件列表            |
-| deps_dir        | get-deps,delete-deps | 指定可选的目录保存下载的依赖app    |
-| deps            | get-deps,delete-deps | 依赖项列表                         |
-| target_dir      | generate             | 目标文件目录                       |
-| overlay_vars    | generate             | overlay 变量文件                   |
-| recursive_cmds  |                      | 需要迭代执行的命令,比如clean,eunit |
+|args            | Command              | 说明                               |
+|----------------+----------------------+------------------------------------|
+|erl_opts        | compile              | compile模块支持的选项,参考[[http://www.erlang.org/doc/man/compile.html][here]]     |
+|erl_first_files | compile              | 应该在其他模块之前进行编译的模块   |
+|clean_files     | clean                | clean命令删除的文件列表            |
+|deps_dir        | get-deps,delete-deps | 指定可选的目录保存下载的依赖app    |
+|deps            | get-deps,delete-deps | 依赖项列表                         |
+|target_dir      | generate             | 目标文件目录                       |
+|overlay_vars    | generate             | overlay 变量文件                   |
+|recursive_cmds  |                      | 需要迭代执行的命令,比如clean,eunit |
 
 
-这里对erl_opts的一些参数进行说明:
-| 参数               | 说明                                                                                                |
-|--------------------+-----------------------------------------------------------------------------------------------------|
-| debug_info         | 以某个code的形式包含调试信息({parse_transform,Module})(lager要求{parse_transform, lager_transform}) |
-| warn_export_all    | 如果代码中给出export_all选项,提示警告信息                                                           |
-| warn_unused_import | 如果import了函数, 但是没有使用到,那就提示警告信息                                                   |
-| src_dirs           | {src_dirs, ["SrcDirs"]} 包含erlang源文件的路径.                                                     |
-| i                  | {i, "IncludeDir"}包含include路径                                                                    |
+里对erl_opts的一些参数进行说明:
+|参数               | 说明                                                                                                |
+|-------------------+-----------------------------------------------------------------------------------------------------|
+|debug_info         | 以某个code的形式包含调试信息({parse_transform,Module})(lager要求{parse_transform, lager_transform}) |
+|warn_export_all    | 如果代码中给出export_all选项,提示警告信息                                                           |
+|warn_unused_import | 如果import了函数, 但是没有使用到,那就提示警告信息                                                   |
+|src_dirs           | {src_dirs, ["SrcDirs"]} 包含erlang源文件的路径.                                                     |
+|i                  | {i, "IncludeDir"}包含include路径                                                                    |
 
-*** 依赖项管理
-**** 依赖管理说明
-rebar 可以拉取和编译从外部获取的工程, 比如从git, hg等等.
+* 依赖项管理
+** 依赖管理说明
+bar 可以拉取和编译从外部获取的工程, 比如从git, hg等等.
 
-如果依赖的工程还依赖了其他的app, 那么rebar也会迭代的把他们拉取下来编译.
+果依赖的工程还依赖了其他的app, 那么rebar也会迭代的把他们拉取下来编译.
 
-**** 定义依赖项
-在rebar.config文件中定义依赖项, 格式如下:
+** 定义依赖项
+rebar.config文件中定义依赖项, 格式如下:
 #+BEGIN_SRC
-   {deps, [Dependency1, Dependency2, ...]}.
+ {deps, [Dependency1, Dependency2, ...]}.
 #+END_SRC
-每一个dependency通过一个三元组来定义:
+一个dependency通过一个三元组来定义:
 #+BEGIN_SRC
-    {App, VsnRegex, Source}
+  {App, VsnRegex, Source}
 #+END_SRC
-App表示这个依赖的app名字,
-VsnRegex是一个字符串, 用正则表示来匹配版本信息.
-Source指出用来拉取代码的引擎(git...)和Url路径, 主要是三部分{引擎,url,版本信息}
+p表示这个依赖的app名字,
+nRegex是一个字符串, 用正则表示来匹配版本信息.
+urce指出用来拉取代码的引擎(git...)和Url路径, 主要是三部分{引擎,url,版本信息}
 
-有的时候使用四元组,最后加上[Raw], 这种情况用在我们下载的源码不符合otp的管理, 没有src/dependency_name.app.src也没有ebin/dependency_name.app文件的时候.
+的时候使用四元组,最后加上[Raw], 这种情况用在我们下载的源码不符合otp的管理, 没有src/dependency_name.app.src也没有ebin/dependency_name.app文件的时候.
 
-*** template的支持
-rebar支持调用模板来创建特定的app,模块等等. 使用也很简单, 比如我们要创建一个gen_server的app, 名叫example,我们可以使用下面的命令很快就实现:
+* template的支持
+bar支持调用模板来创建特定的app,模块等等. 使用也很简单, 比如我们要创建一个gen_server的app, 名叫example,我们可以使用下面的命令很快就实现:
 #+BEGIN_SRC emacs-lisp
-    $ rebar create template=simplesrv srvid=example
-    ==> exampleapp (create)
-    Writing src/example.erl
+  $ rebar create template=simplesrv srvid=example
+  ==> exampleapp (create)
+  Writing src/example.erl
 #+END_SRC
-    除了built-in 模板外, 你也可以自己建立模板, 然后将自己的模板放在~/.rebar/templates/目录下面(没有的话新建一个).
-rebar支持很多已有的模板, 具体参考[[rebar模板][https://github.com/rebar/rebar/wiki/Built-in-templates]]
+  除了built-in 模板外, 你也可以自己建立模板, 然后将自己的模板放在~/.rebar/templates/目录下面(没有的话新建一个).
+bar支持很多已有的模板, 具体参考[[rebar模板][https://github.com/rebar/rebar/wiki/Built-in-templates]]
 
-*** 动态配置
-    erlang 中的配置文件, 比如 rebar.config, reltool.config 和 *.app.src 以及 overlay vars files(在reltool.config中指定的),
-可以进行动态的配置.
-****
-    在这些需要动态配置的文件所在目录添加 xxx.config.script或者*.app.src.script, 这样rebar会根据这个script文件得出最终的配置项.
-当然, 这个script文件中两个变量是已经绑定的:
+* 动态配置
+  erlang 中的配置文件, 比如 rebar.config, reltool.config 和 *.app.src 以及 overlay vars files(在reltool.config中指定的),
+以进行动态的配置.
+**
+  在这些需要动态配置的文件所在目录添加 xxx.config.script或者*.app.src.script, 这样rebar会根据这个script文件得出最终的配置项.
+然, 这个script文件中两个变量是已经绑定的:
 
-CONFIG:
-这是 file:consult/1 函数从xxx.config或者xxx.app.src中读取出来的配置, 如果没有xxx.config 或者 xxx.app.src 文件, 结果就是[].
+NFIG:
+是 file:consult/1 函数从xxx.config或者xxx.app.src中读取出来的配置, 如果没有xxx.config 或者 xxx.app.src 文件, 结果就是[].
 
-SCRIPT:
-这是script的文件名字.
+RIPT:
+是script的文件名字.
 
-**** 实例
-这里就以emqttd中的reltool.config.script文件来做解释:
+** 实例
+里就以emqttd中的reltool.config.script文件来做解释:
 
 #+BEGIN_SRC
-%% -*- mode: erlang;erlang-indent-level: 4;indent-tabs-mode: nil -*-
-%% ex: ft=erlang ts=4 sw=4 et
-Sys         = proplists:get_value(sys, CONFIG),                             %% (1)
-IncludeApps = [App || {app, App, _} <- Sys],                                %% (2)
+ -*- mode: erlang;erlang-indent-level: 4;indent-tabs-mode: nil -*-
+ ex: ft=erlang ts=4 sw=4 et
+s         = proplists:get_value(sys, CONFIG),                             %% (1)
+cludeApps = [App || {app, App, _} <- Sys],                                %% (2)
 
-[DepsDir]   = proplists:get_value(lib_dirs, Sys),                           %% (3)
-DepApps     = lists:map(fun(AppFile) ->                                     %% (4)
-                        {ok, [{application, Name, Attrs}]}
-                            = file:consult(filename:join(DepsDir, AppFile)),
-                        Name
-                      end, filelib:wildcard("*/ebin/*.app", DepsDir)),
-AppendApps  = DepApps -- IncludeApps,                                       %% (5)
-Cond        = [{mod_cond, app}, {incl_cond, include}],                      %% (6)
+epsDir]   = proplists:get_value(lib_dirs, Sys),                           %% (3)
+pApps     = lists:map(fun(AppFile) ->                                     %% (4)
+                      {ok, [{application, Name, Attrs}]}
+                          = file:consult(filename:join(DepsDir, AppFile)),
+                      Name
+                    end, filelib:wildcard("*/ebin/*.app", DepsDir)),
+pendApps  = DepApps -- IncludeApps,                                       %% (5)
+nd        = [{mod_cond, app}, {incl_cond, include}],                      %% (6)
 
-NewSys      = lists:append(Sys, [{app, App, Cond} || App <- AppendApps]),   %% (7)
+wSys      = lists:append(Sys, [{app, App, Cond} || App <- AppendApps]),   %% (7)
 
-lists:keyreplace(sys, 1, CONFIG, {sys, NewSys}).                            %% (8)
+sts:keyreplace(sys, 1, CONFIG, {sys, NewSys}).                            %% (8)
 #+END_SRC
 
-注解:
-#+BEGIN_VERSE
-(1) 中的CONFIG就是利用file:consult/1 从reltool.config 中读取出来的内容, 以tuple的形式存在
-    然后用proplists:get_value获得key为sys的值.
-(2) 提取处sys配置中的额app项
-(3) 获取sys配置中指定的deps目录, 里面放有所有的依赖app.
-(4) 对文件进行操作, 读取编译产生的*/ebin/*.app 中的内容, 提取出依赖的app的名字.
-    filelib:wildcard("*/ebin/*.app", DepsDir)): 从DepsDir目录中提取处满足匹配前面匹配关系的文件.
-    file:consult(filename:join(DepsDir, AppFile)) 读取处文件中的内容.
-(5) 在依赖的app中去掉reltool.config文件中在app级别进行配置的app, 这些配置的级别比sys级别配置的要高.
-(6) 定义一种release的包含模式.
-(7) 由于有的app在reltool.config文件中没有进行配置, 这里统一进行配置.并生成新的sys配置
-(8) 替换成新的配置, 给文件最终就返回了新的配置.
-#+ENG_VERSE
+解:
 
-*** reltool
+1) 中的CONFIG就是利用file:consult/1 从reltool.config 中读取出来的内容, 以tuple的形式存在
+  然后用proplists:get_value获得key为sys的值.
+
+2) 提取处sys配置中的额app项
+
+3) 获取sys配置中指定的deps目录, 里面放有所有的依赖app.
+
+4) 对文件进行操作, 读取编译产生的*/ebin/*.app 中的内容, 提取出依赖的app的名字.
+  filelib:wildcard("*/ebin/*.app", DepsDir)): 从DepsDir目录中提取处满足匹配前面匹配关系的文件.
+  file:consult(filename:join(DepsDir, AppFile)) 读取处文件中的内容.
+
+5) 在依赖的app中去掉reltool.config文件中在app级别进行配置的app, 这些配置的级别比sys级别配置的要高.
+
+6) 定义一种release的包含模式.
+
+7) 由于有的app在reltool.config文件中没有进行配置, 这里统一进行配置.并生成新的sys配置
+
+8) 替换成新的配置, 给文件最终就返回了新的配置.
+
+* reltool
    reltool是erlang提供的一个release管理工具. 我们依据 Erlang/OTP 开发的 application, 最后需要发布,这时需要使用
 reltool 帮我们生成最终的 release, 也称为 target system. 同时 reltool 可以分析 application 的依赖关系,帮助我们正
 确的发布应用.
 
    reltool.config 是配置如何生成release包的文件?
 
-**** reltool 各种参数的说明:
+** reltool 各种参数的说明:
 http://erlangdisplay.iteye.com/
 http://learnyousomeerlang.com/release-is-the-word#am-i-an-executable-yet
 
@@ -157,7 +164,7 @@ release 过程需要将一些编译结果, 配置文件等移植到release包里
 
 主要是release的三级配置, system, app, module 目录的优先级依次升高.
 
-**** 覆盖变量的解释:
+** 覆盖变量的解释:
 https://cartesianfaith.com/2011/09/08/overlay-variables-and-rebar/
 通常vars.config是用来作为overlay文件的, 是不是覆盖文件是在reltool.config文件中通过key: overlay_vars来指定的.
 这个文件提供一些变量来填充template, template可以用以任何模板化的文件.
@@ -183,3 +190,338 @@ vars.config:
 {amqp_host_variable, "127.0.0.1"}.
 
 所有的你需要在release目录里面产生的文件都可以通过在reltool.config文件中利用template或者copy来产生.
+
+* 使用rebar我们是怎么启动app的
+通过rebar create-node之后我们可以看到在rel/files下面会有几个脚本文件，其中有一个<app>的文件，这个
+文件是自动生成的, 而且他们只是一些模板。随后在使用rebar generate -f 的时候会使用一些变量填充模板
+生成./rel/<app>/bin/<app> 这个脚本文件，里面就定义了我们./bin/<app> console|start|stop|restart等
+启动方式。
+
+我们以emqttd来看这个文件：
+
+#+BEGIN_SRC
+ #!/bin/sh
+ # -*- tab-width:4;indent-tabs-mode:nil -*-
+ # ex: ts=4 sw=4 et
+ 
+ # /bin/sh on Solaris is not a POSIX compatible shell, but /usr/bin/ksh is.
+ if [ `uname -s` = 'SunOS' -a "${POSIX_SHELL}" != "true" ]; then
+     POSIX_SHELL="true"
+     export POSIX_SHELL
+     # To support 'whoami' add /usr/ucb to path
+     PATH=/usr/ucb:$PATH
+     export PATH
+     exec /usr/bin/ksh $0 "$@"
+ fi
+ unset POSIX_SHELL # clear it so if we invoke other scripts, they run as ksh as well
+ ######## 1 定义各种目录的变量 
+ RUNNER_SCRIPT_DIR={{runner_script_dir}}
+ RUNNER_SCRIPT=${0##*/}
+ 
+ RUNNER_BASE_DIR={{runner_base_dir}}
+ RUNNER_ETC_DIR={{runner_etc_dir}}
+ RUNNER_LIB_DIR={{platform_lib_dir}}
+ RUNNER_LOG_DIR={{runner_log_dir}}
+ RUNNER_DATA_DIR=$RUNNER_BASE_DIR/data
+ RUNNER_PLUGINS_DIR=$RUNNER_BASE_DIR/plugins
+ 
+ # Note the trailing slash on $PIPE_DIR/
+ PIPE_DIR={{pipe_dir}}
+ RUNNER_USER={{runner_user}}
+ PLATFORM_DATA_DIR={{platform_data_dir}}
+ SSL_DIST_CONFIG=$PLATFORM_DATA_DIR/ssl_distribution.args_file
+ RIAK_VERSION="git"
+ 
+ WHOAMI=$(whoami)
+ 
+ # Make sure this script is running as the appropriate user
+ if ([ "$RUNNER_USER" ] && [ "x$WHOAMI" != "x$RUNNER_USER" ]); then
+     type sudo > /dev/null 2>&1
+     if [ $? -ne 0 ]; then
+         echo "sudo doesn't appear to be installed and your EUID isn't $RUNNER_USER" 1>&2
+         exit 1
+     fi
+     echo "Attempting to restart script through sudo -H -u $RUNNER_USER" >&2
+     exec sudo -H -u $RUNNER_USER -i $RUNNER_SCRIPT_DIR/$RUNNER_SCRIPT $@
+ fi
+ 
+ # Warn the user if ulimit -n is less than 1024
+ ULIMIT_F=`ulimit -n`
+ if [ "$ULIMIT_F" -lt 1024 ]; then
+     echo "!!!!"
+     echo "!!!! WARNING: ulimit -n is ${ULIMIT_F}; 1024 is the recommended minimum."
+     echo "!!!!"
+ fi
+ 
+ # Make sure CWD is set to runner base dir
+ cd $RUNNER_BASE_DIR
+ 
+ # Make sure log directory exists
+ mkdir -p $RUNNER_LOG_DIR
+ 
+ # Make sure the data directory exists
+ mkdir -p $PLATFORM_DATA_DIR
+ 
+ # Warn the user if they don't have write permissions on the log dir
+ if [ ! -w $RUNNER_LOG_DIR ]; then
+     echo "!!!!"
+     echo "!!!! WARNING: $RUNNER_LOG_DIR not writable; logs and crash dumps unavailable."
+     echo "!!!!"
+ fi
+ 
+ # Extract the target node name from node.args
+ NAME_ARG=`egrep '^\-s?name' $RUNNER_ETC_DIR/vm.args`
+ if [ -z "$NAME_ARG" ]; then
+     echo "vm.args needs to have either -name or -sname parameter."
+     exit 1
+ fi
+ NODE_NAME=${NAME_ARG##* }
+ 
+ # Extract the target cookie
+ COOKIE_ARG=`grep '^\-setcookie' $RUNNER_ETC_DIR/vm.args`
+ if [ -z "$COOKIE_ARG" ]; then
+     echo "vm.args needs to have a -setcookie parameter."
+     exit 1
+ fi
+ 
+ # Identify the script name
+ SCRIPT=`basename $0`
+ 
+ # Parse out release and erts info
+ START_ERL=`cat $RUNNER_BASE_DIR/releases/start_erl.data`
+ ERTS_VSN=${START_ERL% *}
+ APP_VSN=${START_ERL#* }
+ 
+ # Add ERTS bin dir to our path
+ ERTS_PATH=$RUNNER_BASE_DIR/erts-$ERTS_VSN/bin
+ 
+ # Setup command to control the node
+ NODETOOL="$ERTS_PATH/escript $ERTS_PATH/nodetool $NAME_ARG $COOKIE_ARG"
+ NODETOOL_LITE="$ERTS_PATH/escript $ERTS_PATH/nodetool"
+ 
+ # Common functions
+ 
+ # Ping node without allowing nodetool to take stdin
+ ping_node() {
+     $NODETOOL ping < /dev/null
+ }
+ 
+ # Set the PID global variable, return 1 on error
+ get_pid() {
+     PID=`$NODETOOL getpid < /dev/null`
+     ES=$?
+     if [ "$ES" -ne 0 ]; then
+         echo "Node is not running!"
+         return 1
+     fi
+ 
+     # don't allow empty or init pid's
+     if [ -z $PID ] || [ "$PID" -le 1 ]; then
+         return 1
+     fi
+ 
+     return 0
+ }
+ 
+ 
+ # Scrape out SSL distribution config info from vm.args into $SSL_DIST_CONFIG
+ rm -f $SSL_DIST_CONFIG
+ sed -n '/Begin SSL distribution items/,/End SSL distribution items/p' \
+     $RUNNER_ETC_DIR/vm.args > $SSL_DIST_CONFIG
+ 
+ # Check the first argument for instructions
+ case "$1" in
+     ############ start也是调用emqttd console启动的
+     start)
+         # Make sure there is not already a node running
+         RES=`ping_node`
+         if [ "$RES" = "pong" ]; then
+             echo "Node is already running!"
+             exit 1
+         fi
+         # Sanity check the emqttd.config file
+         RES=`$NODETOOL_LITE chkconfig $RUNNER_ETC_DIR/emqttd.config`
+         if [ $? != 0 ]; then
+             echo "Error reading $RUNNER_ETC_DIR/emqttd.config"
+             echo $RES
+             exit 1
+         fi
+         HEART_COMMAND="$RUNNER_SCRIPT_DIR/$SCRIPT start"
+         export HEART_COMMAND
+         mkdir -p $PIPE_DIR
+         $ERTS_PATH/run_erl -daemon $PIPE_DIR $RUNNER_LOG_DIR \
+             "exec $RUNNER_SCRIPT_DIR/$SCRIPT console" 2>&1
+ 
+         # Wait for the node to come up. We can't just ping it because
+         # distributed erlang comes up for a second before emqttd crashes
+         # (eg. in the case of an unwriteable disk). Once the node comes
+         # up we check for the node watcher process. If that's running
+         # then we assume things are good enough. This will at least let
+         # the user know when emqttd is crashing right after startup.
+         WAIT=${WAIT_FOR_ERLANG:-15}
+         while [ $WAIT -gt 0 ]; do
+             WAIT=`expr $WAIT - 1`
+             sleep 1
+             RES=`ping_node`
+             if [ "$?" -ne 0 ]; then
+                 continue
+             fi
+ 	    echo "emqttd is started successfully!"
+             exit 0
+         done
+         echo "emqttd failed to start within ${WAIT_FOR_ERLANG:-15} seconds,"
+         echo "see the output of 'emqttd console' for more information."
+         echo "If you want to wait longer, set the environment variable"
+         echo "WAIT_FOR_ERLANG to the number of seconds to wait."
+         exit 1
+         ;;
+ 
+     stop)
+         UNAME_S=`uname -s`
+         case $UNAME_S in
+             Darwin)
+                 # Make sure we explicitly set this because iTerm.app doesn't for
+                 # some reason.
+                 COMMAND_MODE=unix2003
+         esac
+ 
+         # Get the PID from nodetool
+         get_pid
+         GPR=$?
+         if [ "$GPR" -ne 0 ] || [ -z $PID ]; then
+             exit $GPR
+         fi
+ 
+         # Tell nodetool to initiate a stop
+         $NODETOOL stop
+         ES=$?
+         if [ "$ES" -ne 0 ]; then
+             exit $ES
+         fi
+ 
+         # Wait for the node to completely stop...
+         while `kill -s 0 $PID 2>/dev/null`;
+         do
+             sleep 1
+         done
+         ;;
+ 
+     restart)
+         ## Restart the VM without exiting the process
+         $NODETOOL restart
+         ES=$?
+         if [ "$ES" -ne 0 ]; then
+             exit $ES
+         fi
+         ;;
+ 
+     reboot)
+         ## Restart the VM completely (uses heart to restart it)
+         $NODETOOL reboot
+         ES=$?
+         if [ "$ES" -ne 0 ]; then
+             exit $ES
+         fi
+         ;;
+ 
+     ping)
+         ## See if the VM is alive
+         ping_node
+         ES=$?
+         if [ "$ES" -ne 0 ]; then
+             exit $ES
+         fi
+         ;;
+ 
+     attach)
+         if [ "$2" = "-f" ]; then
+           echo "Forcing connection..."
+         else
+           # Make sure a node is running
+           RES=`ping_node`
+           ES=$?
+           if [ "$ES" -ne 0 ]; then
+               echo "Node is not running!"
+               exit $ES
+           fi
+         fi
+ 
+         shift
+         exec $ERTS_PATH/to_erl $PIPE_DIR
+         ;;
+ 
+     console)
+         RES=`ping_node`
+         if [ "$RES" = "pong" ]; then
+             echo "Node is already running - use '$SCRIPT attach' instead"
+             exit 1
+         fi
+         # Sanity check the emqttd.config file
+         RES=`$NODETOOL_LITE chkconfig $RUNNER_ETC_DIR/emqttd.config`
+         if [ $? != 0 ]; then
+             echo "Error reading $RUNNER_ETC_DIR/emqttd.config"
+             echo $RES
+             exit 1
+         fi
+         # Setup beam-required vars
+         ROOTDIR=$RUNNER_BASE_DIR
+         ERL_LIBS=$ROOTDIR/plugins
+         BINDIR=$ROOTDIR/erts-$ERTS_VSN/bin
+         EMU=beam
+         PROGNAME=`echo $0 | sed 's/.*\///'`
+         # Setup Mnesia Dir
+         MNESIA_DIR="$RUNNER_DATA_DIR/mnesia/$NODE_NAME"
+         CMD="$BINDIR/erlexec -boot $RUNNER_BASE_DIR/releases/$APP_VSN/$SCRIPT \
+             -embedded -config $RUNNER_ETC_DIR/emqttd.config \
+             -pa $RUNNER_LIB_DIR/basho-patches \
+             -mnesia dir "\"${MNESIA_DIR}\"" \
+             -args_file $RUNNER_ETC_DIR/vm.args -- ${1+"$@"}"
+         export EMU
+         export ROOTDIR
+         export ERL_LIBS
+         export BINDIR
+         export PROGNAME
+ 
+         # Dump environment info for logging purposes
+         echo "Exec: $CMD"
+         echo "Root: $ROOTDIR"
+ 
+         # Log the startup
+         logger -t "$SCRIPT[$$]" "Starting up"
+ 
+         # Start the VM
+         exec $CMD
+         ;;
+     chkconfig)
+         RES=`$NODETOOL_LITE chkconfig $RUNNER_ETC_DIR/emqttd.config`
+         if [ $? != 0 ]; then
+             echo "Error reading $RUNNER_ETC_DIR/emqttd.config"
+             echo $RES
+             exit 1
+         fi
+         echo "config is OK"
+         ;;
+     escript)
+         shift
+         $ERTS_PATH/escript "$@"
+         ;;
+     version)
+         echo $RIAK_VERSION
+         ;;
+     getpid)
+         # Get the PID from nodetool
+         get_pid
+         ES=$?
+         if [ "$ES" -ne 0 ] || [ -z $PID ]; then
+             exit $ES
+         fi
+         echo $PID
+         ;;
+     *)
+         echo "Usage: $SCRIPT {start|stop|restart|reboot|ping|console|attach|chkconfig|escript|version|getpid}"
+         exit 1
+         ;;
+ esac
+ 
+ exit 0
+#+END_SRC

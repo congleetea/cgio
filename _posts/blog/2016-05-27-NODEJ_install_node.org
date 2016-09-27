@@ -1,6 +1,6 @@
 #+TITLE: 2016-05-27-NODEJ_install_node.org
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Friday, May 27 2016 
 #+OPTIONS: ^:nil
 

@@ -1,0 +1,147 @@
+#+TITLE: 2016-07-19-EMQTTD_subscribe.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  congleetea@gmail.com
+#+DATE:  Tuesday, July 19 2016 
+#+OPTIONS: ^:nil
+
+subscribe的过程其实主要就是将sub的信息放到各种数据库里面，包括mnesia，ets和进程字典, 当topic被发布之后会查询数据库
+决定投递给谁，如何投递。
+#+BEGIN_SRC
+handl_call({subscribe, SubPid, ClientId, Topic, Qos}, _From, State) ->
+    pubsub_subscribe_(SubPid, Topic),    %% call emqttd_pubsub异步订阅，同时处理ets/subscribed表.
+    if_subsciption(State, fun() ->   %% 如果设置subscription==true就要保存订阅到mnesia/subscription表中。
+        add_subscription_(ClientId, Topic, Qos),  %% 处理mnesia/subsciption表.
+        set_subscription_stats()
+    end),
+    ok(monitor_subscriber_(ClientId, SubPid, State));
+
+handle_call({subscribe, SubPid, Topic}, _From, State) ->
+    pubsub_subscribe_(SubPid, Topic),
+    ok(monitor_subscriber_(undefined, SubPid, State));
+#+END_SRC
+
+#+BEGIN_SRC
+%% @doc Call pubsub to subscribe
+pubsub_subscribe_(SubPid, Topic) ->
+    case ets:match(subscribed, {SubPid, Topic}) of % SubPid是否订阅了这个Topic。
+        [] ->                                      % 没有匹配上,(Pid没有订阅这个topic)
+            emqttd_pubsub:async_subscribe(Topic, SubPid), % 异步sub, 立刻返回, 同时处理subscriber表, 并更新mnesia/route表(topic和node)。
+            ets:insert(subscribed, {SubPid, Topic});      % 插入这个订阅.
+        [_] ->   %% Pid已经订阅了这个topic。
+            false
+    end.
+#+END_SRC
+
+#+BEGIN_SRC
+add_subscriber_(Topic, SubPid) ->
+    case ets:member(subscriber, Topic) of       % 查询subscriber表中是否有这个topic的记录。
+        false ->                          % subscriber表中还没有这个topic的记录，topic首次有人订阅
+            mnesia:transaction(fun add_topic_route_/2, [Topic, node()]), % 将订阅信息写到路由表中。
+            setstats(topic);
+        true ->
+            ok
+    end,
+    ets:insert(subscriber, {Topic, SubPid}).
+#+END_SRC
+
+
+
+路由设计遵循的原则：
+
+1 一个message只被转送到集群中 *订阅* 了这个topic的node上，这样将大大减少网络负载，因为这样避免了不必要的消息
+的转送。 
+
+2 只要这个节点上有一个client订阅了这个topic，那么集群上的所有节点都会知道(使用了ram_copies的mnesia表route)，
+如果集群的任何一个节点上有client *发布* 消息到这个topic上，这条消息都会被投递给他的订阅者，不管发布者连接的是
+哪个node。
+
+
+** insert topic to trie 
+
+   
+
+
+** 如何投递
+   可以先设想一下该怎么投递，首先我们要明确:
+
+1  publish的topic是没通配符的，而subscribe的则可能有通配符。此外投递还有可能投递往本节点，也可能在集群的其他节点。
+而我们要根据已有的几个表route, trie, trie_node来判断该投递给那个client。
+
+2  思路是根据Topic和已有的trie和trie_node这两个mnesia表来判断符合那些订阅，取得结果之后，再去route中获取这个Topic
+对应的集群节点，如果是本节点就直接分发，如果是远端节点就使用rpc分发。 
+
+3  难点就是如果使用trie和trie_node表, 这个在emqttd_router:lookup(Topic)中进行了查找。
+
+
+#+BEGIN_SRC
+%% @doc Publish message to Topic.
+-spec(publish(binary(), any()) -> any()).
+publish(Topic, Msg) ->
+    lists:foreach(
+        fun(#mqtt_route{topic = To, node = Node}) when Node =:= node() ->
+            ?MODULE:dispatch(To, Msg);
+           (#mqtt_route{topic = To, node = Node}) ->
+            rpc:cast(Node, ?MODULE, dispatch, [To, Msg])
+        end, emqttd_router:lookup(Topic)).
+#+END_SRC
+emqttd_router:lookup中调用了emqttd_trie:match(Topic),返回匹配的结果，然后再在route表中查找。重要的是emqttd_trie:Match
+的使用：
+先找匹配的trie_node，也就包含了终极的topic和前面任何一级包含通配符的情况。
+#+BEGIN_SRC
+%% @doc Find trie nodes that match topic
+-spec(match(Topic :: binary()) -> list(MatchedTopic :: binary())).
+match(Topic) when is_binary(Topic) ->
+    TrieNodes = match_node(root, emqttd_topic:words(Topic)),
+    [Name || #trie_node{topic=Name} <- TrieNodes, Name =/= undefined].
+#+END_SRC
+
+#+BEGIN_SRC
+%% @doc Match node with word or '+'.
+match_node(root, [<<"$SYS">>|Words]) ->
+    match_node(<<"$SYS">>, Words, []);
+
+match_node(NodeId, Words) ->
+    match_node(NodeId, Words, []).
+
+match_node(NodeId, [], ResAcc) ->
+    mnesia:read(trie_node, NodeId) ++ 'match_#'(NodeId, ResAcc);
+
+match_node(NodeId, [W|Words], ResAcc) ->
+    lists:foldl(fun(WArg, Acc) ->
+        case mnesia:read(trie, #trie_edge{node_id=NodeId, word=WArg}) of
+        [#trie{node_id=ChildId}] -> match_node(ChildId, Words, Acc);
+        [] -> Acc
+        end
+    end, 'match_#'(NodeId, ResAcc), [W, '+']).
+
+%% @private
+%% @doc Match node with '#'.
+'match_#'(NodeId, ResAcc) ->
+    case mnesia:read(trie, #trie_edge{node_id=NodeId, word = '#'}) of
+    [#trie{node_id=ChildId}] ->
+        mnesia:read(trie_node, ChildId) ++ ResAcc;
+    [] ->
+        ResAcc
+    end.
+#+END_SRC
+在console中匹配一下：
+#+BEGIN_SRC
+(emqttd1@127.0.0.1)5> mnesia:transaction(fun emqttd_trie:match/1, [<<"t/s/x">>]). 
+{atomic,[<<"t/+/x">>,<<"t/#">>]}
+#+END_SRC
+看出返回的是trie_node下面中的第三和第五项, 这就是客户端订阅的两项。
+| {trie_node,root,1,undefined,undefined}          |
+| {trie_node,<<"t">>,2,undefined,undefined}       |
+| {trie_node,<<"t/#">>,0,<<"t/#">>,undefined}     |
+| {trie_node,<<"t/+">>,2,undefined,undefined}     |
+| {trie_node,<<"t/+/x">>,0,<<"t/+/x">>,undefined} |
+| {trie_node,<<"t/+/y">>,0,<<"t/+/y">>,undefined} |
+现在根据匹配的返回结果去route表中查找满足该条件的记录并返回。
+#mqtt_route{topic = Topic, node = Node}
+在本节点或者远端节点上执行emqttd_pubsub:dispatch(Topic, Msg)
+
+接着在ets表subscriber中查找订阅这个To的所有客户端的SessId，向他们发出{dispatch, Topic, Msg}信号.
+
+
+
+接下来就要详细解析qos消息的处理了，包括qos1/2消息的收发流程和离线消息，飞行消息的处理。

@@ -1,6 +1,6 @@
 #+TITLE: 2016-05-20-EMQTTD_hook_dis_connected.org
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Friday, May 20 2016 
 #+OPTIONS: ^:nil
  

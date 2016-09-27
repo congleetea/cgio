@@ -20,6 +20,12 @@ Erlang 对相关模块进行打包的一种手段(包括库运用和主动运用
 识符(比如把这些 PID 和对应进程保存在某个数据库中)。
 
 ** 同步通信和异步通信
+** OTP 的精髓
+OTP 本来是开放电信平台的简称，但是现在基本已经脱离本意了。我们在使用很多功能的时候有很多相同的步骤，
+为了避免我们重复这些逻辑，减少可能出现的错误，所以出现了 OTP。OTP 的本质就是找到所有通用的组件，把它们
+提炼到库中，保证它们可以良好运行，然后尽可能地重用他们。接下来就只需要关注那些专有的部分，也就是那些
+总是随运用变化而变化的部分。
+
 *** 异步通信也叫“即发即忘”
 发送完就不管了，接着做自己的事，稍后接收方可能会发送一个响应回来,也有可能不会发送。
 *** 同步通信 
@@ -179,13 +185,24 @@ noreply 表示 gen_server 将会以 NewState 继续执行，任何给 From 的�
 *** handle_cast(Msg, State)
 没有 From 参数，返回 Msg 给服务器, 不用返回给调用方。
 *** handle_info 带外消息
-除了 call 和 cast 发送的消息都是带外消息，这类消息也会放进进程的信箱，由 handle_info 处理。
+除了 call 和 cast 发送的消息都是带外消息，这类消息也会放进进程的信箱，(这个函数处理由!操作符发送的消息，以及如 
+init/1 中 timeout、监控器通知或者 EXIT 信号之类的特殊消息。)由 handle_info 处理。
 通过{active，true}设置的 socket 主动推送来的消息也属于带外消息。
+*** terminate
+当上面的 handle_*函数返回形如{stop,Reason,NewState}或者{stop,Reason,Reply,NewState}的元组的时候，会调用 terminate/2
+函数。当父进程(创建服务器的进程)死亡的时候，也会调用 terminate/2 函数，不过这只发生在 gen_server 捕获了退出信号的时候。
 
+这个函数和 init/1 正好相反，因此所有在 init/1 中的操作，在 terminate/2 中都用相应的取消动作。
+
+*** code_change/3
+用于代码热升级。
 
 *** 回调的返回值总结
+** gen_fsm 有限状态机
+如果在状态 S 的时候发生了事件 E, 那么执行动作 A 并且使状态 S 过渡( transition )到状态 S'.
 
-** gen_server 的超时时间使用
+** gen_event 事件处理器
+| 所有事件都是通过 gen_event:notify/2 函数来触发的 |
 
 * Supervisor
 ** application 行为模式
@@ -236,12 +253,12 @@ Max 和 WithIn 共同确定最大重启频率，表示在 WithIn(s)内最多重�
 *** 子进程规范
 {ChildID, Start,Restart,ShutDown,ChildType,DepMods}
 
-| ChildID   | 原子类的标签，用来在 supervisor 内部识别子进程规范的名字.                                               |
-| Start     | {M, F, A}, 用户 API 调用 gen_server:start_*(?MODULE,ArgB, [])时 ArgB 会并入参数 A.                          |
-| Restart   | permanent:终止都要重启;temporary:永不重启;transient:仅以外终止时重启.                                 |
+| ChildID   | 原子类的标签，用来在 supervisor 内部识别子进程规范的名字.                                                  |
+| Start     | {M, F, A}, 用户 API 调用 gen_server:start_*(?MODULE,ArgB, [])时 ArgB 会并入参数 A.                         |
+| Restart   | permanent:终止都要重启;temporary:永不重启;transient:仅意外终止时重启.                                      |
 | ShutDown  | (ms)给 Shutdown 时间给进程自我了断(时间内收到 exit 退出消息);brutal_kill 立即关闭;infinity:给充分时间关闭. |
-| ChildType | worker 还是 supervisor.                                                                               |
-| DepMods   | List,表示依赖的模块，仅用于代码热升级时告知系统该以何种顺序升级各个模块.                              |
+| ChildType | worker 还是 supervisor.                                                                                    |
+| DepMods   | List,表示依赖的模块，仅用于代码热升级时告知系统该以何种顺序升级各个模块.                                   |
 
 在使用 supervisor 时，用户不能直接调用进程的用户启动接口，应该由 supervisor 来启动，这样才能接受监督。
 

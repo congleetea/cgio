@@ -1,6 +1,6 @@
 #+TITLE: 2016-05-21-ERLNG_errors_and_exceptions.org
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Saturday, May 21 2016 
 #+OPTIONS: ^:nil
 

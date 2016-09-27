@@ -1,6 +1,6 @@
 #+TITLE: 2016-06-01-ERLNG_mnesia_overload.org
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Thursday, June  2 2016 
 #+OPTIONS: ^:nil
 

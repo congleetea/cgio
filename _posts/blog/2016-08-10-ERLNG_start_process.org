@@ -1,0 +1,22 @@
+#+TITLE: 2016-08-10-ERLNG_start_process.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  Wednesday, August 10 2016 
+#+OPTIONS: ^:nil
+
+本节总结几种erlang中启动进程的方式。
+
+要想启动的进程受监督于supervisor，需使用一种特定方式启动才能由监督树启动。我们知道在supervisor中调用
+gen_server:start_link启动的进程是会重启的，其实gen_server:start_link内部也是调用了proc_lib:start_link启动的.
+
+官方文档对proc_lib的描述是：
+#+BEGIN_SRC
+Functions for asynchronous and synchronous start of processes adhering to the OTP design principles.
+#+END_SRC
+也就是它可以使进程同步或者异步地遵循OTP设计原则启动。
+
+而单纯通过spawn_*启动的进程是不会被supervisor重启的。因此如果我们不使用gen_server，如果使用proc_lib:*启动进程，同
+样可以受监督树监督而实现重启。
+
+proc_lib:start_*和proc_lib:spawn_*的区别是：前者是同步创建子进程，后者是异步创建子进程，proc_lib:start_link调用后
+会阻塞，直到子进程初始化完毕，调用proc_lib:init_ack后才返回。而proc_lib:spawn_link一调用就会立即返回子进程ID。

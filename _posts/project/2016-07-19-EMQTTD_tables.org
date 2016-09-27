@@ -1,0 +1,159 @@
+#+TITLE: 2016-07-19-EMQTTD_tables.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  congleetea@gmail.com
+#+DATE:  Tuesday, July 19 2016 
+#+OPTIONS: ^:nil
+
+* mnesia/subscriptions: 
+| 这是dashboard中subscriptions读取的表，内容#mqtt_subscriptions |
+| 使用local_content表示本地可用，不会在节点间同步。             |
+
+#+BEGIN_SRC
+emqttd_mnesia:create_table(subscription, [
+                {type, bag},
+                {ram_copies, [node()]},
+                {local_content, true}, %% subscription table is local
+                {record_name, mqtt_subscription},
+                {attributes, record_info(fields, mqtt_subscription)}]);
+#+END_SRC
+#+BEGIN_SRC
+-record(mqtt_subscription, {
+    subid   :: binary() | atom(),
+    topic   :: binary(),
+    qos = 0 :: 0 | 1 | 2
+}).
+#+END_SRC
+
+* ets/subscribed
+| 记录这个Pid订阅了哪些topic。Pid -> Topic1, Topic2, ..., TopicN     |
+| session DOWN时，删除相关记录，查找订阅的topic，并unsubscribe它们。 |
+| [public, named_table, bag, ?CONCURRENCY_OPTS]                      |
+这里使用bag类型，是因为一个Pid订阅2个topic，那就会有两条记录。
+* ets/subscriber
+| 记录这个topic有哪些订阅者。 Topic -> Pid1, Pid2, ..., PidN |
+| 在topic投递的时候，通过它知道要投递给谁                    |
+| [public, named_table, duplicate_bag ,?CONCURRENCY_OPTS]    |
+
+* mnesia/topic 
+  内存复制
+| 记录所有的被订阅的topic和相应的属性                |
+| Record = #mqtt_topic{topic = Topic, flags = Flags} |
+#+BEGIN_SRC
+emqttd_pubsub.erl:
+emqttd_mnesia:create_table(topic, [
+                {ram_copies, [node()]},
+                {record_name, mqtt_topic},
+                {attributes, record_info(fields, mqtt_topic)}]);
+#+END_SRC
+* mnesia/route 
+  内存复制
+| 记录订阅这个topic的用户在那个节点。                  |
+| 负责映射topic到集群的节点(不计Pid,只计topic和node)。 |
+| add_route(#mqtt_route{topic = Topic, node = node()}) |
+| 如果一个node挂掉，会更新route表吗?                   |
+| 如果unsubscribe之后，会更新route表吗?                |
+
+#+BEGIN_SRC
+emqttd_router.erl:
+emqttd_mnesia:create_table(route, [
+            {type, bag},
+            {ram_copies, [node()]},
+            {record_name, mqtt_route},
+            {attributes, record_info(fields, mqtt_route)}]);
+#+END_SRC
+
+* mnesia/trie_node
+  内存复制
+| 用来处理记录订阅topic的各级路径和topic，
+#+BEGIN_SRC
+emqttd_mnesia:create_table(trie_node, [
+                {ram_copies, [node()]},
+                {record_name, trie_node},
+                {attributes, record_info(fields, trie_node)}]);
+-record(trie_node, {
+    node_id         :: trie_node_id(),
+    edge_count = 0  :: non_neg_integer(),
+    topic           :: binary() | undefined,
+    flags           :: [retained | static]
+}).
+#+END_SRC
+
+* mnesia/trie 
+  内存复制
+| 用来处理  |
+#+BEGIN_SRC
+emqttd_mnesia:create_table(trie, [
+                {ram_copies, [node()]},
+                {record_name, trie},
+                {attributes, record_info(fields, trie)}]),
+#+END_SRC
+#+BEGIN_SRC
+-record(trie, {
+    edge          :: #trie_edge{},
+    node_id       :: trie_node_id()
+}).
+-record(trie_edge, {
+    node_id        :: trie_node_id(),    %% 从topic的第一级顺来的路径，叫node_id
+    word           :: binary() | atom()  %% node_id下面一项。
+}).
+#+END_SRC
+
+例子：
+node1: sub: 't/+/x' 't/+/y'
+node2: sub: 't/#' 
+node3: sub: 't/a'
+
+trie: {edge, node_id}
+| {trie,{trie_edge,root,<<"t">>},<<"t">>}          |
+| {trie,{trie_edge,<<"t">>,'#'},<<"t/#">>}         |
+| {trie,{trie_edge,<<"t">>,'+'},<<"t/+">>}         |
+| {trie,{trie_edge,<<"t/+">>,<<"x">>},<<"t/+/x">>} |
+| {trie,{trie_edge,<<"t/+">>,<<"y">>},<<"t/+/y">>} |
+可以看出edge有两项，分别是父子连接，源头是root。
+而node_id表示从第一级顺道edge的连接。
+有什么作用？
+
+
+trie_node:{node_id,edge_count,topic,flags}
+| {trie_node,root,1,undefined,undefined}          |
+| {trie_node,<<"t">>,2,undefined,undefined}       |
+| {trie_node,<<"t/#">>,0,<<"t/#">>,undefined}     |
+| {trie_node,<<"t/+">>,2,undefined,undefined}     |
+| {trie_node,<<"t/+/x">>,0,<<"t/+/x">>,undefined} |
+| {trie_node,<<"t/+/y">>,0,<<"t/+/y">>,undefined} |
+node_id就是trie里面的node_id,只是多处了root。也可以叫path
+edge_count表示这个node_id下面子node个数, root的edge_count个数就是cluster中所有topic第一个级的类型个数。
+topic表示这个node_id下面订阅的完整topic。
+一定存在一个node_id和订阅Topic相同的记录。
+
+对一个新的Topic，如果trie_node表中node_id没有这个记录,那么：
+#+BEGIN_SRC
+(emqttd1@127.0.0.1)1> emqttd_topic:triples(<<"t/+/x">>).
+[{root,<<"t">>,<<"t">>},    %% {从第一级一次到后面各级(node), node下面一级word, 前面两项的组合child}
+ {<<"t">>,'+',<<"t/+">>},
+ {<<"t/+">>,<<"x">>,<<"t/+/x">>}]
+
+然后对上面list每一项做add_path。
+%% @doc Add path to trie tree.
+add_path({Node, Word, Child}) ->
+    Edge = #trie_edge{node_id=Node, word=Word},
+    case mnesia:read(trie_node, Node) of
+    [TrieNode = #trie_node{edge_count=Count}] ->
+        case mnesia:wread({trie, Edge}) of
+        [] ->
+            mnesia:write(TrieNode#trie_node{edge_count=Count+1}),
+            mnesia:write(#trie{edge=Edge, node_id=Child});
+        [_] ->
+            ok
+        end;
+    [] ->
+        mnesia:write(#trie_node{node_id=Node, edge_count=1}),
+        mnesia:write(#trie{edge=Edge, node_id=Child})
+    end.
+#+END_SRC
+
+route: {topic, node}
+| {mqtt_route,<<"t/#">>,'emqttd2@127.0.0.1'}   |
+| {mqtt_route,<<"t/+/x">>,'emqttd1@127.0.0.1'} |
+| {mqtt_route,<<"t/+/y">>,'emqttd1@127.0.0.1'} |
+| {mqtt_route,<<"t/a">>,'emqttd3@127.0.0.1'}   |

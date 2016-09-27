@@ -266,7 +266,7 @@ SSL的握手协议非常有效的让客户和服务器之间完成相互之间�
 所需要的各种信息。
 
 2  服务器向客户端传送 SSL 协议的版本号，加密算法的种类，随机数以及其他相关信息，同时服务器还将向客户端传送自己的
-书。
+证书。
 
 3  客户利用服务器传过来的信息验证服务器的合法性，服务器的合法性包括：证书是否过期，发行服务器证书的 CA 是否可靠，
 行者证书的公钥能否正确解开服务器证书的“发行者的数字签名”，服务器证书上的域名是否和服务器的实际域名相匹配。如果
@@ -333,57 +333,66 @@ SSL的握手协议非常有效的让客户和服务器之间完成相互之间�
 
 * mqtts如何使用
 ** emqttd 服务器设置
-开启mqtts：
+由于mqtt使用ssl/tsl涉及签名问题，而且emqttd通常会以集群的形式布置，这时候我们可以在负载均衡地方
+进行ssl验证，也就是前段到LB使用SSL加密，LB到emqttd则不用加密。
+
+将产生的服务器key和crt文件，利用cat合并成pem文件放在特定的目录下面：
 #+BEGIN_SRC
-emqttd/listener:
+$ cat haproxyhost.crt haproxyhost.key > haproxyhost.pem
+#+END_SRC 
+注意顺序，必须crt在前，key在后。
 
-{mqtts, 8883, [
-            %% Size of acceptor pool
-            {acceptors, 32},
+我们使用haproxy作为负载均衡器，配置如下：
+#+BEGIN_SRC
+frontend mqtt-websocket-ssl
+  bind *:18883 ssl crt /etc/ssl/haproxyhost.pem
+  mode http
+  option httpclose 
+  option forwardfor
+  reqadd X-Forwarded-Proto:\http
+  default_backend backend-websocket
 
-            %% Maximum number of concurrent clients
-            {max_clients, 100000},
+frontend mqtt-websocket
+  bind *:11883
+  mode http
+  option httpclose 
+  option forwardfor
+  reqadd X-Forwarded-Proto:\http
+  default_backend backend-websocket
 
-            %% Socket Access Control
-            {access, [{allow, all}]},
-
-            %% SSL certificate and key files
-            {ssl, [{certfile, "etc/ssl/ssl.crt"},
-                   {keyfile,  "etc/ssl/ssl.key"}]},
-
-            %% Socket Options
-            {sockopts, [
-                {ifaddr, {127,0,0,1}},
-                {backlog, 1024}
-                %{buffer, 4096},
-            ]}
-        ]},
-
-        %% WebSocket over HTTPS Listener
-        {https, 18883, [
-         %% Size of acceptor pool
-         {acceptors, 32},
-         %% Maximum number of concurrent clients
-         {max_clients, 512},
-         %% Socket Access Control
-         {access, [{allow, all}]},
-         %% SSL certificate and key files
-         {ssl, [{certfile, "etc/ssl/ssl.crt"},
-                {keyfile,  "etc/ssl/ssl.key"}]},
-         %% Socket Options
-         {sockopts, [
-             {ifaddr, {127,0,0,1}},
-             %{buffer, 4096},
-             {backlog, 1024}
-         ]}
-        ]},
+backend backend-websocket
+  mode http
+  option httplog
+  server emqttd0 192.168.33.12:11883
+  server emqttd1 192.168.33.16:11883
 #+END_SRC
+将认证证书和私钥放在/etc/ssl/目录下面，websocket和websocket(ssl)的连接都经过haproxy转到websocket的端口。
+
+附：验证证书的有效性：
+$ openssl verify /etc/ssl/haproxyhost.pem
+
+如果证书和私钥是通过CA生成的， 附带参数：
+$ openssl verify -CAfile /etc/ssl/ca.crt /etc/ssl/haproxyhost.pem
 
 ** client 配置
 使用mqtt.js:
 在connect的属性配置里面：
-| 端口对应emqttd的配置，使用18883使用mqtts连接。        |
+| 端口对应emqttd的配置，使用8883使用mqtts连接。         |
 | 添加属性protocol: 'mqtts'                             |
 | 如果使用自认证方式，必须设置rejectUnauthorized: false |
 
 其他和mqtt一样。
+
+** 测试
+使用hivemq的客户端进行连接， 在使用websocket(ssl)的时候会提示：
+Connect failed: AMQJS0007E Socket error:undefined.
+浏览器控制台则提示：
+WebSocket connection to 'wss://192.168.0.77:18883/mqtt' failed: WebSocket opening handshake was canceled
+显示握手失败。
+
+这可能是证书不能被浏览器认可而导致的。我们在网址中输入：https://192.168.0.77:18883/mqtt
+点击继续，这个证书就会被浏览器接受，后面就可以通过浏览器的mqtt客户端连接websocket(ssl)了。
+
+
+由于测试的时候需要频繁启动haproxy，有时候会提示连接关闭，你可以通过ps查看你是不是启动了多个配置不一样的
+haproxy了，如果是，关闭所有重新启动就可以。

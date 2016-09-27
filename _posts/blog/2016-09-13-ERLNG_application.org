@@ -1,0 +1,43 @@
+#+TITLE: 2016-09-13-ERLNG_application
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  lixuancong@molmc.com
+#+DATE:  星期二, 九月 13 2016 
+#+OPTIONS: ^:nil
+
+* application 行为模式
+
+* 启动方式
+- permanent
+应用程序死掉之后，所有其他运用程序和运行时系统也会死掉。
+- transient
+应用程序终止的原因是 normal,这个消息会报出来但是其它应用程序不会重启,如果应用程序终止的原因不是
+normal,其他应用程序和运行时也会跟着死掉.
+
+*这种方法很少用* ，因为进程数崩掉的时候，进程正常退出原因是 shutdown，不是 normal，这样，其他运用程序
+和运行时系统也会死掉, 正常情况下我们不应该让其他运用也死掉.
+- temporary (默认启动方式)
+应用程序死掉会报错误出来但是其它应用程序不受影响.
+
+* 启动过程
+Erlang 运行时启动时,application controller 进程会随着 Kernel 应用程序启动,在 erlang shell 中可以通过
+whereis(application_controller)找到它.应用程序相关的操作都由它来协调完成,它通过 application 模块暴露出
+来的接口来实现应用程序的加载,卸载,启动,停止等等.
+
+application controller 会检查 application 的参数，需要确保依赖的运用提前启动成功，如果没有启动，也不会
+启动他们，而是报出{error,{not_started,App}}的错误(这里的 App 是没有提前启动的 App)。
+
+application controller 会给运用创建一个 application master，这是这个运用中多有进程的 group leader，master
+会调用在 AppName.app 中配置的 mod 项指定的模块中的 start/2 函数来启动该 app。比如运用 emqttd，在 emqttd.app
+中的 mod 项中指定了 emqttd_app 模块，那么 master 就会执行回调 emqttd_app:start/2 来启动运用。
+
+Mod:start/2 回调函数的返回值一定是固定的，否则启动会失败：
+#+BEGIN_SRC erlang
+start(StartType, StartArgs) -> {ok, Pid} | {ok, Pid, State}
+#+END_SRC
+同样，还有一个回调 stop/1 会在停止运用的时候用到。
+
+* 停止过程
+要停止 application,application master 首先会调用 Module:prep_stop/1(如果存在,没有就跳过),然后告知顶层的 
+supervisor 关闭(shutdown),shutdown 的过程:整个监控树的所有进程和包含的应用程序按照启动的逆序终止. shutdown 
+完成之后, application master 调用 Module:stop/1. 最后 application master 自己终止掉. application 停止了,
+但是依然处于已加载的状态(loaded).
