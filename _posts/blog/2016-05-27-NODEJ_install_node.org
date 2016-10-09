@@ -7,7 +7,7 @@
 ** install nvm and source .xxshrc or others
   $ curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.30.1/install.sh | bash
 
-会在zshrc中加入相应的路径配置信息:
+会在 zshrc 中加入相应的路径配置信息:
 
   $ source ~/.zshrc
 
@@ -15,14 +15,19 @@
 
   $ source ~/.bashrc
 ** install node use 'nvm install node-version'
-  $ nvm install 5.6.0
+| 安装 5.6.0 版本  | $ nvm install 5.6.0       |
+| 查看版本       | $ nvm ls                  |
+| 使用 5.6.0 版本 | $ nvm use 5.6.0           |
+| 默认使用该版本 | $ nvm alias default 5.6.0 |
+
 ** install bower and source .xxshrc and use it to install deps
   $ npm install -g bower
+
+
+下面根据各个工程来通过 bower 下载依赖项
 ** 下载依赖
   $ bower install
 
-会根据bower.json来下载相应的依赖项。
+会根据 bower.json 来下载相应的依赖项。
 ** 编译
   $ npm run build 
-
-
