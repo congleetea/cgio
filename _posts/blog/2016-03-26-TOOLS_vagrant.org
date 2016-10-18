@@ -1,0 +1,74 @@
+#+TITLE: 2016-03-26-TOOLS_vagrant.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  congleetea@gmail.com
+#+DATE:  Thursday, May 19 2016 
+#+OPTIONS: ^:nil
+
+* 安装 virtualbox 和 vagrant 
+    
+上官网下载最新的 virtualbox 安装即可。
+还要下载你需要的 box，也就是你需要的系统镜像。
+
+可以直接通过：
+    vagrant box add ubuntu14.04_amd64 xxx.box 
+这样就会产生~/.vagrant.d 文件夹，并把 xxx.box 解压之后放在 boxes 文件夹中。
+
+也可以直接下载，比如：
+````````````
+$ vagrant box add ubuntu/trusty64
+````````````
+他将会从 https://atlas.hashicorp.com 上的资源下载。
+
+* 创建一个目录来管理所有的虚拟机：
+$ mkdir vagrant && cd vagrant  
+在该目录下面创建一个针对某个主机的文件:
+$ mkdir machines 
+在该目录下面执行：
+$ vagrant init ubuntu14.04_amd64 # 后者就是 box 的名字，如果不指出，默认是 base
+这样就在该目录下面产生 Vagrantfile 文件了。
+
+** 配置 Vagrantfile
+
+这是重点，根据你自己的需要来设计虚拟机。
+
+** 快速操作
+
+*** box 产生
+在你的目录下面新建一个 vagrant 目录， 在里面执行：
+#+BEGIN_SRC shell
+$ vagrant box add
+$ cd ~/.vagrant.d && ls
+boxes  data  gems  insecure_private_key  rgloader  setup_version  tmp
+#+END_SRC
+
+完成之后会在产生~/.vagrant.d 文件，查看里面产生的文件接着把下载的镜像解压，出现 boxes 文件，
+用它把.vagrant.d 里面的 boxes 替换掉。
+
+*** 配置
+在 vagrant 目录里面建立一个属于这个 box 的文件夹：
+#+BEGIN_SRC shell
+$ mkdir mongodbTrusty && cd mongodbTrusty
+#+END_SRC
+
+*** 如果你已经有了 vagrangfile，那么直接 将 vagrantfile 复制到该目录下面，修改 ip 为你需要的 ip 地址。执行： 
+#+BEGIN_SRC shell
+$ vagrant up 
+#+END_SRC
+
+等执行结束就安装好了。
+ 
+如果没有的话，执行 vagrant init 会生成一个，你修改里面的配置，重新执行 vagrant up 就行了。
+
+*** 登陆到这台机器上：
+#+BEGIN_SRC shell
+$ vagrant ssh 
+#+END_SRC
+
+如果有多台机器，跟上主机名和 ip。
+
+** Ubuntu 下面的 win7 虚拟机
+*** 如何全屏
+启动 win7， 在菜单栏中 devices --> insert ..., 然后会弹出一个窗口，根据提示安装 VBoxWindowsAdditions.exe.
+*** 连接硬盘
+从这里下载 VM VirtualBox Extension Pack (https://www.virtualbox.org/wiki/Downloads), 
+然后在设置中是能 USB 运用(保证启动 virtualbox，但是没有启动虚拟运用)。
