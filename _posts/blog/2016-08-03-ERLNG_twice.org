@@ -1,6 +1,6 @@
 #+TITLE: 2016-08-03-ERLNG_twice.org
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Wednesday, August  3 2016 
 #+OPTIONS: ^:nil
 

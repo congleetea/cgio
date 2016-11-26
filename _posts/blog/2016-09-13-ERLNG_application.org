@@ -1,6 +1,6 @@
 #+TITLE: 2016-09-13-ERLNG_application
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  星期二, 九月 13 2016 
 #+OPTIONS: ^:nil
 

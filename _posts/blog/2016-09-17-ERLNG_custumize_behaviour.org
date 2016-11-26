@@ -1,6 +1,6 @@
 #+TITLE: 2016-09-17-ERLNG_custumize_behaviour.org
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Saturday, September 17 2016 
 #+OPTIONS: ^:nil
 

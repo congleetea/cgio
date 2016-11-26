@@ -1,0 +1,6 @@
+#+TITLE: 2016-10-14-ERLNG_tricks.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  congleetea@gmail.com
+#+DATE:  Friday, October 14 2016 
+#+OPTIONS: ^:nil
+

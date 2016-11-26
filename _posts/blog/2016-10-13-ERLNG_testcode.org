@@ -1,0 +1,77 @@
+#+TITLE: 2016-10-13-ERLNG_testcode.org
+#+AUTHOR: Xuancong Lee 
+#+EMAIL:  congleetea@gmail.com
+#+DATE:  Thursday, October 13 2016 
+#+OPTIONS: ^:nil
+
+* overall
+本节总结 erlang 中的两个测试方式 eunit 和 common test。分析两种方式的优缺点，掌握他们
+各自的运用场景和使用方法。
+
+* How To Write Common Test
+[[http://erlang.org/doc/apps/common_test/write_test_chapter.html][Write Test Suites]]
+
+** 关于 Test Suites
+- 测试套件是一个包含测试用例的普通 erlang 文件。建议以*_SUITES.erl 来命名，否则默认的 Common Test 不能加载目录和自动编译函数。
+- 建议在模块的开头包含 ct.hrl: -include_lib("common_test/include/ct.hrl").
+- 每个套件模块都必须导出函数 all/0，它会返回模块中所有需要测试的用例组和用例。
+- 套件中被 common test 执行的所有回调函数都在[[http://erlang.org/doc/man/common_test.html][Common Test]]中列出。
+
+** Common Test 的初始化和清理函数
+- 套件的初始化函数和清理函数
+套件的初始化函数和清理函数不是测试模块必须的，如果定义了这些函数 init_per_suit/1 和 end_per_suit/1, 那么
+他会在所有测试用例执行前和执行后执行一次。主要负责处理所有测试用例都需要的公共状态和依赖关系。比如，手动启动所依赖的其他应用。
+
+- 测试用例的初始化函数和清理函数
+init_per_testcase/2 和 end_per_testcase/2,如果定义了这些函数， 在每个测试用例执行前后都会执行一遍这两个函数。
+
+这两个函数包含两个参数， 第一个参数说明哪些测试用例会执行这个初始化函数，第二个是配置的参数, 如果有 suit 的初始化函数，这个
+参数就是 suit 初始化函数返回的参数。通过第一个参数的过滤匹配，我们可以写多个初始化函数，让不同的测试用例执行不同的初始化函数。
+
+- 测试组的初始化函数和清理函数
+init_per_group/2 和 end_per_group/2。前面说过，某些测试用例都会执行相应的初始化和清理函数，但是很多测试用例的初始化是
+一样的，这样每次都执行就显得多余，因此就有测试组的概念，把测试重组成层次化的形式，甚至组还可以嵌套。
+
+组的定义在函数 group/0 中，里面定义和组名，组的属性，组的成员组的定义在函数 group/0 中，里面定义和组名，组的属性，组的成员。
+然后把组名和其他测试用例放在 all/0 函数中进行。
+
+** 搭配 rebar 使用 common test
+通过 rebar 来进行 common test 很方便。下面是一些步骤。
+
+- rebar.config 中的配置
+在这里我们可以定义一些 common test 测试需要的变量：
+#+BEGIN_SRC erlang 
+
+{eunit_opts, []}. %%verbose
+
+{ct_dir, "test"}.
+
+{ct_log_dir, "logs"}.
+
+{ct_extra_params, "-name ct_node@127.0.0.1 -config rel/files/app.test.config"}.
+
+{ct_use_short_names, false}.
+
+{cover_enabled, true}.
+
+#+END_SRC
+
+- Makefile 中的设置
+#+BEGIN_SRC shell
+test:
+	ERL_FLAGS="-config rel/files/app.test.config"   %% 定义一些需要的变量
+  $(REBAR) -v skip_deps=true ct                   %% 执行 common test 的测试.
+	$(REBAR) skip_deps=true eunit                   %% 执行 eunit 的测试.
+#+END_SRC
+然后直接运行 make test 即可得到测试结果。
+* tricks
+** 提示误导
+#+BEGIN_SRC shell
+=== Ended at 2016-10-18 10:26:23
+=== Location: unknown
+=== Reason: 'molmc_SUITE can not be compiled or loaded'
+#+END_SRC
+这时候其实不是找不到这个模块，都已经报里面有错了，那肯定已经找到了，注意看 Reason，说模块不能编译和加载，这
+往往是模块里面有问题，所以没有编译过，也就更不能加载。这里的 Location 并不是模块位置，而是错误定位。这时候可
+以仔细查找命令行中的 log 信息，会提示诸如变量为绑定，等等。
+

@@ -1,0 +1,304 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+<!-- 2016-10-18 Tue 10:52 -->
+<meta  http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<meta  name="viewport" content="width=device-width, initial-scale=1" />
+<title>2016-10-13-ERLNG_testcode.org</title>
+<meta  name="generator" content="Org-mode" />
+<meta  name="author" content="Xuancong Lee" />
+<style type="text/css">
+ <!--/*--><![CDATA[/*><!--*/
+  .title  { text-align: center;
+             margin-bottom: .2em; }
+  .subtitle { text-align: center;
+              font-size: medium;
+              font-weight: bold;
+              margin-top:0; }
+  .todo   { font-family: monospace; color: red; }
+  .done   { font-family: monospace; color: green; }
+  .priority { font-family: monospace; color: orange; }
+  .tag    { background-color: #eee; font-family: monospace;
+            padding: 2px; font-size: 80%; font-weight: normal; }
+  .timestamp { color: #bebebe; }
+  .timestamp-kwd { color: #5f9ea0; }
+  .org-right  { margin-left: auto; margin-right: 0px;  text-align: right; }
+  .org-left   { margin-left: 0px;  margin-right: auto; text-align: left; }
+  .org-center { margin-left: auto; margin-right: auto; text-align: center; }
+  .underline { text-decoration: underline; }
+  #postamble p, #preamble p { font-size: 90%; margin: .2em; }
+  p.verse { margin-left: 3%; }
+  pre {
+    border: 1px solid #ccc;
+    box-shadow: 3px 3px 3px #eee;
+    padding: 8pt;
+    font-family: monospace;
+    overflow: auto;
+    margin: 1.2em;
+  }
+  pre.src {
+    position: relative;
+    overflow: visible;
+    padding-top: 1.2em;
+  }
+  pre.src:before {
+    display: none;
+    position: absolute;
+    background-color: white;
+    top: -10px;
+    right: 10px;
+    padding: 3px;
+    border: 1px solid black;
+  }
+  pre.src:hover:before { display: inline;}
+  pre.src-sh:before    { content: 'sh'; }
+  pre.src-bash:before  { content: 'sh'; }
+  pre.src-emacs-lisp:before { content: 'Emacs Lisp'; }
+  pre.src-R:before     { content: 'R'; }
+  pre.src-perl:before  { content: 'Perl'; }
+  pre.src-java:before  { content: 'Java'; }
+  pre.src-sql:before   { content: 'SQL'; }
+
+  table { border-collapse:collapse; }
+  caption.t-above { caption-side: top; }
+  caption.t-bottom { caption-side: bottom; }
+  td, th { vertical-align:top;  }
+  th.org-right  { text-align: center;  }
+  th.org-left   { text-align: center;   }
+  th.org-center { text-align: center; }
+  td.org-right  { text-align: right;  }
+  td.org-left   { text-align: left;   }
+  td.org-center { text-align: center; }
+  dt { font-weight: bold; }
+  .footpara { display: inline; }
+  .footdef  { margin-bottom: 1em; }
+  .figure { padding: 1em; }
+  .figure p { text-align: center; }
+  .inlinetask {
+    padding: 10px;
+    border: 2px solid gray;
+    margin: 10px;
+    background: #ffffcc;
+  }
+  #org-div-home-and-up
+   { text-align: right; font-size: 70%; white-space: nowrap; }
+  textarea { overflow-x: auto; }
+  .linenr { font-size: smaller }
+  .code-highlighted { background-color: #ffff00; }
+  .org-info-js_info-navigation { border-style: none; }
+  #org-info-js_console-label
+    { font-size: 10px; font-weight: bold; white-space: nowrap; }
+  .org-info-js_search-highlight
+    { background-color: #ffff00; color: #000000; font-weight: bold; }
+  /*]]>*/-->
+</style>
+<script type="text/javascript">
+/*
+@licstart  The following is the entire license notice for the
+JavaScript code in this tag.
+
+Copyright (C) 2012-2013 Free Software Foundation, Inc.
+
+The JavaScript code in this tag is free software: you can
+redistribute it and/or modify it under the terms of the GNU
+General Public License (GNU GPL) as published by the Free Software
+Foundation, either version 3 of the License, or (at your option)
+any later version.  The code is distributed WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE.  See the GNU GPL for more details.
+
+As additional permission under GNU GPL version 3 section 7, you
+may distribute non-source (e.g., minimized or compacted) forms of
+that code without the copy of the GNU GPL normally required by
+section 4, provided you include this license notice and a URL
+through which recipients can access the Corresponding Source.
+
+
+@licend  The above is the entire license notice
+for the JavaScript code in this tag.
+*/
+<!--/*--><![CDATA[/*><!--*/
+ function CodeHighlightOn(elem, id)
+ {
+   var target = document.getElementById(id);
+   if(null != target) {
+     elem.cacheClassElem = elem.className;
+     elem.cacheClassTarget = target.className;
+     target.className = "code-highlighted";
+     elem.className   = "code-highlighted";
+   }
+ }
+ function CodeHighlightOff(elem, id)
+ {
+   var target = document.getElementById(id);
+   if(elem.cacheClassElem)
+     elem.className = elem.cacheClassElem;
+   if(elem.cacheClassTarget)
+     target.className = elem.cacheClassTarget;
+ }
+/*]]>*///-->
+</script>
+</head>
+<body>
+<div id="content">
+<h1 class="title">2016-10-13-ERLNG_testcode.org</h1>
+<div id="table-of-contents">
+<h2>Table of Contents</h2>
+<div id="text-table-of-contents">
+<ul>
+<li><a href="#orgheadline1">1. overall</a></li>
+<li><a href="#orgheadline5">2. How To Write Common Test</a>
+<ul>
+<li><a href="#orgheadline2">2.1. 关于 Test Suites</a></li>
+<li><a href="#orgheadline3">2.2. Common Test 的初始化和清理函数</a></li>
+<li><a href="#orgheadline4">2.3. 搭配 rebar 使用 common test</a></li>
+</ul>
+</li>
+<li><a href="#orgheadline7">3. tricks</a>
+<ul>
+<li><a href="#orgheadline6">3.1. 提示误导</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+
+<div id="outline-container-orgheadline1" class="outline-2">
+<h2 id="orgheadline1"><span class="section-number-2">1</span> overall</h2>
+<div class="outline-text-2" id="text-1">
+<p>
+本节总结 erlang 中的两个测试方式 eunit 和 common test。分析两种方式的优缺点，掌握他们各自的运用场景和使用方法。
+</p>
+</div>
+</div>
+
+<div id="outline-container-orgheadline5" class="outline-2">
+<h2 id="orgheadline5"><span class="section-number-2">2</span> How To Write Common Test</h2>
+<div class="outline-text-2" id="text-2">
+<p>
+<a href="http://erlang.org/doc/apps/common_test/write_test_chapter.html">Write Test Suites</a>
+</p>
+</div>
+
+<div id="outline-container-orgheadline2" class="outline-3">
+<h3 id="orgheadline2"><span class="section-number-3">2.1</span> 关于 Test Suites</h3>
+<div class="outline-text-3" id="text-2-1">
+<ul class="org-ul">
+<li>测试套件是一个包含测试用例的普通 erlang 文件。建议以*_SUITES.erl 来命名，否则默认的 Common Test 不能加载目录和自动编译函数。</li>
+<li>建议在模块的开头包含 ct.hrl: -include_lib("common_test/include/ct.hrl").</li>
+<li>每个套件模块都必须导出函数 all/0，它会返回模块中所有需要测试的用例组和用例。</li>
+<li>套件中被 common test 执行的所有回调函数都在<a href="http://erlang.org/doc/man/common_test.html">Common Test</a>中列出。</li>
+</ul>
+</div>
+</div>
+
+<div id="outline-container-orgheadline3" class="outline-3">
+<h3 id="orgheadline3"><span class="section-number-3">2.2</span> Common Test 的初始化和清理函数</h3>
+<div class="outline-text-3" id="text-2-2">
+<ul class="org-ul">
+<li>套件的初始化函数和清理函数</li>
+</ul>
+<p>
+套件的初始化函数和清理函数不是测试模块必须的，如果定义了这些函数 init_per_suit/1 和 end_per_suit/1, 那么他会在所有测试用例执行前和执行后执行一次。主要负责处理所有测试用例都需要的公共状态和依赖关系。比如，手动启动所依赖的其他应用。
+</p>
+
+<ul class="org-ul">
+<li>测试用例的初始化函数和清理函数</li>
+</ul>
+<p>
+init_per_testcase/2 和 end_per_testcase/2,如果定义了这些函数， 在每个测试用例执行前后都会执行一遍这两个函数。
+</p>
+
+<p>
+这两个函数包含两个参数， 第一个参数说明哪些测试用例会执行这个初始化函数，第二个是配置的参数, 如果有 suit 的初始化函数，这个参数就是 suit 初始化函数返回的参数。通过第一个参数的过滤匹配，我们可以写多个初始化函数，让不同的测试用例执行不同的初始化函数。
+</p>
+
+<ul class="org-ul">
+<li>测试组的初始化函数和清理函数</li>
+</ul>
+<p>
+init_per_group/2 和 end_per_group/2。前面说过，某些测试用例都会执行相应的初始化和清理函数，但是很多测试用例的初始化是一样的，这样每次都执行就显得多余，因此就有测试组的概念，把测试重组成层次化的形式，甚至组还可以嵌套。
+</p>
+
+<p>
+组的定义在函数 group/0 中，里面定义和组名，组的属性，组的成员组的定义在函数 group/0 中，里面定义和组名，组的属性，组的成员。然后把组名和其他测试用例放在 all/0 函数中进行。
+</p>
+</div>
+</div>
+
+<div id="outline-container-orgheadline4" class="outline-3">
+<h3 id="orgheadline4"><span class="section-number-3">2.3</span> 搭配 rebar 使用 common test</h3>
+<div class="outline-text-3" id="text-2-3">
+<p>
+通过 rebar 来进行 common test 很方便。下面是一些步骤。
+</p>
+
+<ul class="org-ul">
+<li>rebar.config 中的配置</li>
+</ul>
+<p>
+在这里我们可以定义一些 common test 测试需要的变量：
+</p>
+<div class="org-src-container">
+
+<pre class="src src-erlang"><span style="color: #707183;">{</span>eunit_opts, <span style="color: #7388d6;">[]</span><span style="color: #707183;">}</span>. <span style="color: #ff0000;">%%</span><span style="color: #ff0000;">verbose</span>
+
+<span style="color: #707183;">{</span>ct_dir, <span style="color: #00ff00;">"test"</span><span style="color: #707183;">}</span>.
+
+<span style="color: #707183;">{</span>ct_log_dir, <span style="color: #00ff00;">"logs"</span><span style="color: #707183;">}</span>.
+
+<span style="color: #707183;">{</span>ct_extra_params, <span style="color: #00ff00;">"-name ct_node@127.0.0.1 -config rel/files/app.test.config"</span><span style="color: #707183;">}</span>.
+
+<span style="color: #707183;">{</span>ct_use_short_names, false<span style="color: #707183;">}</span>.
+
+<span style="color: #707183;">{</span>cover_enabled, true<span style="color: #707183;">}</span>.
+</pre>
+</div>
+
+<ul class="org-ul">
+<li>Makefile 中的设置</li>
+</ul>
+<div class="org-src-container">
+
+<pre class="src src-shell">test:
+  <span style="color: #ffff00;">ERL_FLAGS</span>=<span style="color: #00ff00;">"-config rel/files/app.test.config"</span>   %% &#23450;&#20041;&#19968;&#20123;&#38656;&#35201;&#30340;&#21464;&#37327;
+  $<span style="color: #707183;">(</span>REBAR<span style="color: #707183;">)</span> -v <span style="color: #ffff00;">skip_deps</span>=true ct                   %% &#25191;&#34892; common test &#30340;&#27979;&#35797;.
+  $<span style="color: #707183;">(</span>REBAR<span style="color: #707183;">)</span> <span style="color: #ffff00;">skip_deps</span>=true eunit                   %% &#25191;&#34892; eunit &#30340;&#27979;&#35797;.
+</pre>
+</div>
+<p>
+然后直接运行 make test 即可得到测试结果。
+</p>
+</div>
+</div>
+</div>
+<div id="outline-container-orgheadline7" class="outline-2">
+<h2 id="orgheadline7"><span class="section-number-2">3</span> tricks</h2>
+<div class="outline-text-2" id="text-3">
+</div><div id="outline-container-orgheadline6" class="outline-3">
+<h3 id="orgheadline6"><span class="section-number-3">3.1</span> 提示误导</h3>
+<div class="outline-text-3" id="text-3-1">
+<div class="org-src-container">
+
+<pre class="src src-shell">=== Ended at <span style="color: #ff00ff;">2016-10-18</span> <span style="color: #ff00ff;">10:26:23</span>
+=== Location: unknown
+=== Reason: <span style="color: #00ff00;">'molmc_SUITE can not be compiled or loaded'</span>
+</pre>
+</div>
+<p>
+这时候其实不是找不到这个模块，都已经报里面有错了，那肯定已经找到了，注意看 Reason，说模块不能编译和加载，这往往是模块里面有问题，所以没有编译过，也就更不能加载。这里的 Location 并不是模块位置，而是错误定位。
+</p>
+</div>
+</div>
+</div>
+</div>
+<div id="postamble" class="status">
+<p class="date">Date: Thursday, October 13 2016</p>
+<p class="author">Author: Xuancong Lee</p>
+<p class="date">Created: 2016-10-18 Tue 10:52</p>
+<p class="validation"><a href="http://validator.w3.org/check?uri=referer">Validate</a></p>
+</div>
+</body>
+</html>

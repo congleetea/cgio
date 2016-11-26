@@ -1,6 +1,6 @@
 #+TITLE: 2016-08-02-ERLNG_erlang_monitors.org
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Tuesday, August  2 2016 
 #+OPTIONS: ^:nil
 

@@ -1,6 +1,6 @@
 #+TITLE: 2016-07-29-ERLNG_process.org
 #+AUTHOR: Xuancong Lee 
-#+EMAIL:  lixuancong@molmc.com
+#+EMAIL:  congleetea@gmail.com
 #+DATE:  Friday, July 29 2016 
 #+OPTIONS: ^:nil
 
