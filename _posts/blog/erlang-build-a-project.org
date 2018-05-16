@@ -1,0 +1,48 @@
+#+TITLE:       使用erlang.mk构建工程
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-09-02 Sat
+#+URI:         /blog/%y/%m/%d/使用erlangmk构建工程
+#+KEYWORDS:    erlang.mk,erlang,build 
+#+TAGS:        erlang,points 
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: <TODO: insert your description here>
+
+* 基础结构搭建
+#+BEGIN_SRC shell
+$ mkdir my_project
+$ cd my_project
+$ wget wget https://erlang.mk/erlang.mk
+$ make -f erlang.mk bootstrap
+$ make -f erlang.mk bootstrap-rel
+$ make
+#+END_SRC
+
+完成之后会形成基本的工程结构。
+
+* 添加依赖项
+主要是修改relx.conf文件和Makefile文件。
+
+- Makefile
+
+#+BEGIN_SRC make
+PROJECT = my_project 
+PROJECT_DESCRIPTION = New project
+PROJECT_VERSION = 0.1.0
+
+DEPS = lager brod
+
+dep_lager  = git https://github.com/basho/lager master
+dep_brod   = git https://github.com/congleetea/brod
+
+include erlang.mk
+#+END_SRC
+
+执行make获取依赖项到deps目录中。
+
+
+* 更便捷的使用erlang.mk
+
+  为了更便捷的使用erlang.mk构建工程，我结合erlang.mk，cuttlefish做了一个工具，
+  直接运行就可以得到一个工程，请参照[[https://github.com/congleetea/erlang.mk][congleetea/erlang.mk]]。

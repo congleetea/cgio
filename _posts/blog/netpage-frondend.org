@@ -1,0 +1,109 @@
+#+TITLE:       网页设计
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-11-24 Fri
+#+URI:         /blog/%y/%m/%d/网页设计
+#+KEYWORDS:    js,html,css
+#+TAGS:        points
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: <TODO: insert your description here>
+
+
+
+* 什么是 HTML？
+- HTML 是用来描述网页的一种语言。
+- HTML 指的是超文本标记语言 (Hyper Text Markup Language).
+- HTML 不是一种编程语言，而是一种标记语言 (markup language).
+- 标记语言是一套标记标签 (markup tag).
+- HTML 使用标记标签来描述网页.
+- HTML文档=网页.
+- Web 浏览器的作用是读取 HTML 文档，并以网页的形式显示出它们。浏览器不会显示 HTML 标签，而是使用标签来解释页面的内容.
+
+例子解释
+
+- <html> 与 </html> 之间的文本描述网页
+- <body> 与 </body> 之间的文本是可见的页面内容
+- <h1> 与 </h1> 之间的文本被显示为标题
+- <p> 与 </p> 之间的文本被显示为段落
+
+** 元素
+- HTML 元素语法
+- HTML 元素以开始标签起始
+- HTML 元素以结束标签终止
+- 元素的内容是开始标签与结束标签之间的内容
+- 某些 HTML 元素具有空内容（empty content）
+- 空元素在开始标签中进行关闭（以开始标签的结束而结束）
+- 大多数 HTML 元素可拥有属性
+
+** 属性
+- HTML 标签可以拥有属性。属性提供了有关 HTML 元素的更多的信息。
+- 始终为属性值加引号。属性值应该始终被包括在引号内。双引号是最常用的，不过使用单引号也没有问题。在某些个别的情况下，比如属性值本身就含有双引号，那么您必须使用单引号。
+
+** 样式
+- style 属性用于改变 HTML 元素的样式：通过style 属性直接将样式添加到HTML元素。
+- 可以间接地在独立的样式表中(CSS文件)定义样式。
+
+
+* HTML CSS 
+
+通过使用 HTML4.0，所有的格式化代码均可移出 HTML 文档，然后移入一个独立的样式表。
+
+** 如何使用样式
+当浏览器读到一个样式表，它就会按照这个样式表来对文档进行格式化。有以下三种方式来插入样式表：
+
+*** 外部样式表(全局布局)
+当样式需要被应用到很多页面的时候，外部样式表将是理想的选择。使用外部样式表，你就可以通过更改一个文件来改变整个站点的外观。
+
+#+BEGIN_SRC html
+  <head>
+    <link rel="stylesheet" type="text/css" href="mystyle.css">
+  </head>
+#+END_SRC
+
+*** 内部样式表(特别在单个文件的特殊需要时)
+当单个文件需要特别样式时，就可以使用内部样式表。你可以在 head 部分通过 <style> 标签定义内部样式表。
+
+#+BEGIN_SRC html
+  <head>
+    <style type="text/css">
+      body {background-color: red}
+      p {margin-left: 20px}
+    </style>
+  </head>
+#+END_SRC
+
+*** 内联样式(个别元素的特殊需要)
+当特殊的样式需要应用到个别元素时，就可以使用内联样式。 使用内联样式的方法是在相关的标签中使用样式属性。样式属性可以包含任何 CSS 属性。以下实例显示出如何改变段落的颜色和左外边距。
+
+* HTML的一些元素
+
+** HTML 块 <div> <span> 
+大多数 HTML 元素被定义为块级元素或内联元素。 块级元素在浏览器显示时，通常会以新行来开始（和结束）(例子：<h1>, <p>, <ul>, <table>)。内联元素在显示时通常不会以新行开始。(例子：<b>, <td>, <a>, <img>)
+
+***  块级元素<div> 元素
+    
+- HTML <div> 元素是块级元素，它是可用于组合其他 HTML 元素的容器。
+- <div> 元素没有特定的含义。除此之外，由于它属于块级元素，浏览器会在其前后显示折行。
+- 如果与 CSS 一同使用，<div> 元素可用于对大的内容块设置样式属性。
+- <div> 元素的另一个常见的用途是文档布局。它取代了使用表格定义布局的老式方法。使用 <table> 元素进行文档布局不是表格的正确用法。<table> 元素的作用是显示表格化的数据。
+
+*** 内联元素 <span> 元素
+- HTML <span> 元素是内联元素，可用作文本的容器。
+- <span> 元素也没有特定的含义。
+- 当与 CSS 一同使用时，<span> 元素可用于为部分文本设置样式属性。
+
+** HTML 类
+   定义类就是为了方便样式设置。
+- 对 HTML 进行分类（设置类），使我们能够为元素的类定义 CSS 样式。
+- 为相同的类设置相同的样式，或者为不同的类设置不同的样式。
+- CSS中使用.ClassName{xx:val}设置样式。
+
+*** <div class="cities"> </div>可以实现分类块级元素
+*** <span> 元素是行内元素，能够用作文本的容器。
+
+** HTML 布局
+
+*** 使用 <div> 标签的HTML 布局
+- <id>元素在html中是全局唯一的。可以在CSS中通过#IDNAME{}进行设置. 
+- HTML5提供的新语义元素定义了网页的不同部分: header,nav,section,article,aside,footer,details,summary。

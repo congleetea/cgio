@@ -1,0 +1,19 @@
+#+TITLE:       查看磁盘空间大小和占用情况
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-07-08 Sat
+#+URI:         /blog/%y/%m/%d/查看磁盘空间大小和占用情况
+#+KEYWORDS:    linux,system,disk
+#+TAGS:        points
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: <TODO: insert your description here>
+
+* 查看分区情况  
+
+- 整体情况 
+df -h
+
+- 查看文件和文件夹使用情况
+du -h: 会列出所有的文件，看起来没什么意义。
+du -h --max-depth=1: 只查看第一层的文件大小，很有用。

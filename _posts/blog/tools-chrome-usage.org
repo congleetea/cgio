@@ -1,0 +1,20 @@
+#+TITLE:       Chrome使用
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-09-13 Wed
+#+URI:         /blog/%y/%m/%d/chrome使用
+#+KEYWORDS:    chrome,tools 
+#+TAGS:        tools,points 
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: 使用chrome的问题记录 
+
+
+* dns_probe_finished_bad_config
+
+  #+BEGIN_SRC org
+  $ sudo dpkg-reconfigure resolvconf
+  $ 查看/etc/resolvconf下面的head/base，以及/etc/resolv.conf中的配置，添加dns服务器
+  $ sudo resolvconf -u 
+  #+END_SRC
+

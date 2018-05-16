@@ -1,0 +1,33 @@
+#+TITLE:       erlang 使用中遇到的错误
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-03-20 Mon
+#+URI:         /blog/%y/%m/%d/erlang错误收集
+#+KEYWORDS:    erlang,error
+#+TAGS:        points,erlang
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: 陆续记录erlang使用到的一些错误。
+
+
+*** {badmatch, {error, eacces}} 
+原因是某些文件的权限问题, 如下, 修改权限。
+#+BEGIN_SRC text
+ERROR: compile failed while processing /home/emqttd/deps/gproc: {'EXIT',{{badmatch,{error,eacces}},
+         [{rebar_erlc_compiler,store_erlcinfo,2,
+                               [{file,"src/rebar_erlc_compiler.erl"},
+                                {line,490}]},
+          {rebar_erlc_compiler,init_erlcinfo,2,
+                               [{file,"src/rebar_erlc_compiler.erl"},
+                                {line,392}]},
+          {rebar_erlc_compiler,doterl_compile,4,
+                               [{file,"src/rebar_erlc_compiler.erl"},
+                                {line,302}]},
+          {rebar_core,run_modules,4,[{file,"src/rebar_core.erl"},{line,493}]},
+          {rebar_core,execute,6,[{file,"src/rebar_core.erl"},{line,418}]},
+          {rebar_core,maybe_execute,8,
+                      [{file,"src/rebar_core.erl"},{line,302}]},
+          {rebar_core,process_dir1,7,[{file,"src/rebar_core.erl"},{line,261}]},
+          {rebar_core,process_commands,2,
+                      [{file,"src/rebar_core.erl"},{line,93}]}]}}
+#+END_SRC

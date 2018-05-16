@@ -1,0 +1,211 @@
+#+OPTIONS: ^:nil
+#+TITLE:       erlang 有限状态机 gen_fsm 
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2016-11-12 Sat
+#+URI:         /blog/%y/%m/%d/erlang 的 gen_fsm
+#+KEYWORDS:    erlang,gen_fsm
+#+TAGS:        erlang, points
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: erlang 的有限状态机
+
+* Q
+
+- 有限状态机是什么?         
+- 用在什么场合?             
+- erlang 中怎么使用 gen_fsm? 
+
+* 概述
+
+[[https://zh.wikipedia.org/wiki/%E6%9C%89%E9%99%90%E7%8A%B6%E6%80%81%E6%9C%BA][有限状态机]] （英语：finite-state machine，缩写：FSM）又称有限状态自动机，简称状态机，
+是表示有限个状态以及在这些状态之间的转移和动作等行为的数学模型。
+
+状态机可归纳为 4 个要素，即现态、条件、动作、次态。这样的归纳，主要是出于对状态机的
+内在因果关系的考虑。
+
+#+BEGIN_SRC erlang
+“现态”和“条件”是因，“动作”和“次态”是果。
+1. 现态：是指当前所处的状态。
+2. 条件：又称为“事件”，当一个条件被满足，将会触发一个动作，或者执行一次状态的迁移。
+3. 动作：条件满足后执行的动作。动作执行完毕后，可以迁移到新的状态，也可以仍旧保持原状态。动作不是必需的，当条件满足后，也可以不执行任何动作，直接迁移到新状态 。
+4. 次态：条件满足后要迁往的新状态。“次态”是相对于“现态”而言的，“次态”一旦被激活，就转变成新的“现态”了。
+#+END_SRC
+
+今天介绍 erlang 的一个非常重要的 behaviour，就是 gen_fsm-有限状态机，之前一直没有用
+过它，有限状态机的作用非常之多，比如文本解析，模式匹配、游戏逻辑等等方面的处理都是
+它的强项，
+
+有限状态机可以用下面这个公式来表达:
+
+#+BEGIN_SRC erlang
+State(S) x Event(E) -> Actions(A), State(S')
+#+END_SRC
+
+* 一个例子
+
+这里摘了[[https://erlshawn.wordpress.com/2011/05/12/gen_fsm/][Erlang-shawm]] 的一个解释。
+
+erlang 手册中用这个例子来解释的：开锁问题，有一个密码锁的门，它就可以看作一个状态机，
+初始状态门是锁着的，任何时候有人按一个密码键就会产生一个事件，这个键值和前面的按键组
+合后与密码相比较，看是否正确，如果输入的密码顺序是对的，那么将门打开 30 秒，如果输入
+密码不完全，则等待下次按钮按下，如果输入密码顺序是错的，则重新开始等待按键按下。
+
+先贴上代码：
+#+BEGIN_SRC erlang
+-module(code_lock).
+-behaviour(gen_fsm).
+-export([start_link/1]).
+-export([button/1]).
+-export([init/1, locked/2, open/2]).
+
+%% 启动状态机
+%% 通过调用 gen_fsm:start_link/4 启动 gen_fsm. 他应该被 supervisor 调用加入监督树。
+%% 在此，启动的时候把锁的密码保存起来，也就是Code。
+start_link(Code) ->
+    %% (进程名，毁掉模块，给init/1的参数，状态机选项)， 注册成功调用init(Code).
+    gen_fsm:start_link({local, code_lock}, code_lock, Code, []).
+
+button(Digit) ->
+    %% (进程注册名，事件)，事件被收到会调用以当前状态为名的函数,参数是(事件名，状态数据)。
+    gen_fsm:send_event(code_lock, {button, Digit}).
+
+%% 返回的第二项是锁的初始状态,同时也是出现该状态要执行的回调函数, 这个值应该是一个 atom 类型，因为后面会执行由此命令的函数。
+init(Code) ->
+    {ok, locked, {[], Code}}.
+locked({button, Digit}, {SoFar, Code}) ->
+    case [Digit|SoFar] of
+        Code ->
+            do_unlock(),
+            {next_state, open, {[], Code}, 3000};
+        Incomplete when length(Incomplete)<length(Code) ->
+            {next_state, locked, {Incomplete, Code}};
+        _Wrong ->
+            {next_state, locked, {[], Code}}
+    end.
+open(timeout, State) ->
+    do_lock(),
+    {next_state, locked, State}.
+#+END_SRC
+
+- 状态机启动返回初始状态
+
+  注意 gen_fsm:start_link 是同步的，直到 gen_fsm 进程初始化并准备好开始接受请求时才 
+  会返回。
+
+  - param1：  进程注册名           
+  - param2：  回调模块             
+  - param3：  传递给 init/1 的参数 
+  - param4：  []状态机的选项       
+
+  如果进程注册成功，则会调用 init(Code)函数返回{ok, StateName, StateData}。StateName
+  是 gen_fsm 的初始状态，在这里返回的是 locked，表示初始状态下门是锁着的，StateData
+  是 gen_fsm 的内部状态，在这里 Statedata 是当前的按键顺序（初始时为空）和正确的锁
+  代码，是个列表。
+
+- 事件通知
+
+  #+BEGIN_SRC erlang
+    button(Digit) ->
+         gen_fsm:send_event(code_lock, {button, Digit}).
+  #+END_SRC
+
+  code_lock 是 gen_fsm (进程注册名)的名字，且必须用这个名字启动进程，{button, Digit}
+  是发送的事件，事件是作为消息发送给 gen_fsm 的，当事件被接收到，gen_fsm 就调用 
+  StateName(Event, StateData),即 locked/2，它的返回值应该是{next_state, StateName1, 
+  StateData1, Timeout}。StateName 是当前状态名称，Event 是事件触发，而 StateName1 是将转换到的
+  下一状态名称，StateData1 是 StateData 的新值, Timeout 是可选的，表示新状态维持这段时间之后发送
+  超时信号。
+
+  注意返回值 tuple 第一个是 next_state.
+
+  假如门是锁着的且按了一个按键，完整的按键序列和密码相比较，根据比较结果来决定门是打开
+  （状态切到 open）还是保持 locked 状态。
+
+- 超时处理
+
+  假如输入的密码正确，门被打开，locked/2 函数返回下面的序列：
+
+  #+BEGIN_SRC erlang
+    {next_state, open, {[], Code}, 30000};
+  #+END_SRC
+
+  最后一个参数 30000 表示 30000ms，即在 30s 之后超时信号，执行 StateName(timeout, State)
+  函数，即 open(timeout,State)门自动关上。
+
+- 所有状态事件
+
+  有时候一个事件可以到达 gen_fsm 进程的任何状态，取代用 gen_fsm:send_event/2 发送消息和写
+  一段每个状态函数处理事件的代码，这个消息我们可以 *用 gen_fsm:send_all_state_event/2 发送，*
+  *用 Module:handle_event/3 处理* 。
+
+  #+BEGIN_SRC erlang
+  -module(code_lock).
+  …
+  -export([stop/0]).
+  …
+  stop() ->
+      gen_fsm:send_all_state_event(code_lock, stop).
+  …
+  handle_event(stop, _StateName, StateData) ->
+      {stop, normal, StateData}.
+  #+END_SRC
+
+- 停止
+
+  假如 gen_fsm 是监控树的一部分，则不需要停止方法，gen_fsm 会自动被监控者停止。如果需要在结
+  束前清理数据，那么 shutdown strategy 必须为一个 timeout，并且必须在 gen_fsm 的 init 方法里
+  设置捕获 exit 信号，然后 gen_fsm 进程会调用 callback 方法 terminate(shutdown, StateName, 
+  StateData)
+
+  #+BEGIN_SRC erlang
+  init(Args) ->
+      …,
+      process_flag(trap_exit, true),
+      …,
+      {ok, StateName, StateData}.
+  …
+  terminate(shutdown, StateName, StateData) ->
+      ..code for cleaning up here..
+      ok.
+  #+END_SRC
+
+- 独立 gen_fsm 进程
+
+  加入 gen_fsm 不是监控树的一部分，stop 函数可能有用，如:
+
+  #+BEGIN_SRC erlang
+  -export([stop/0]).
+  …
+  stop() ->
+      gen_fsm:send_all_state_event(code_lock, stop).
+  …
+  handle_event(stop, _StateName, StateData) ->
+      {stop, normal, StateData}.
+  …
+  terminate(normal, _StateName, _StateData) ->
+      ok.
+  #+END_SRC
+
+  回调函数处理 stop 事件并返回{stop, normal, StateData1}，normal 表示正常停止，StateData1 为
+  gen_fsm 的新的 StateData 值，这将导致 gen_fsm 调用 terminate(normal, StateName, StateData1)
+  然后自然的停止。
+
+- 处理其他信息
+
+  收到的其他消息由 handle_info(Info, StateName, StateData)处理，比如exit消息，假如 gen_fsm 进
+  程与其他进程 link 了并且 trace 了信号，就要处理 exit 消息。
+  
+  #+BEGIN_SRC erlang
+  handle_info({'EXIT', Pid, Reason}, StateName, StateData) ->
+      ..code to handle exits here..
+      {next_state, StateName1, StateData1}.
+  code_change(OldVsn, StateName, StateData, Extra) ->
+      ..code to convert state (and more) during code change
+      {ok, NextStateName, NewStateData}
+  #+END_SRC
+
+
+* reference
+
+  - https://erlshawn.wordpress.com/2011/05/12/gen_fsm/ 

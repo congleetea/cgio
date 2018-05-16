@@ -1,0 +1,71 @@
+#+TITLE:       erlang 新版有限状态机 gen_statem
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-06-29 Thu
+#+URI:         /blog/%y/%m/%d/erlang行为模式gen_statem
+#+KEYWORDS:    erlang,otp,gen_statem
+#+TAGS:        erlang,points
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: gen_statem
+
+* 小结
+- OTP19.0新增的行为模式, 在OTP20.0中会替换掉gen_fsm，gen_fsm不再使用。gen_statem有gen_fsm相同的功能，同时新增加了一些有用的东西。
+- 事件驱动的状态机：State(S) x Event(E) -> Actions(A), State(S')
+- 回调模型有两种：state_functions,handle_event_function,需要在代码中callback_mode()指定, 他们各自有相应的状态转移规则。前者和gen_fsm一样，需要状态是一个原子，并用这些状态作为当前的回调函数；后者则只通过一个handle_event函数来处理各种数据，所以对状态的数据类型要求不严格。 
+
+
+* 回调
+
+#+BEGIN_SRC text 
+gen_statem module            Callback module
+-----------------            ---------------
+gen_statem:start
+gen_statem:start_link -----> Module:init/1
+
+Server start or code change
+                      -----> Module:callback_mode/0
+
+gen_statem:stop       -----> Module:terminate/3
+
+gen_statem:call
+gen_statem:cast
+erlang:send
+erlang:'!'            -----> Module:StateName/3
+                             Module:handle_event/4
+
+-                     -----> Module:terminate/3
+
+-                     -----> Module:code_change/4
+#+END_SRC
+
+注意：
+
+- export的函数必须要有init/1, callback_mode/0, terminate/3, SomeStateName/3, code_change/4。
+- 不管是调用gen_statem的call还是cast，或者通过send,!发送数据，都会由SomeStateName/3, 或者handle_event/4处理。
+- 一旦一个回调函数失败，或者返回错误的数据，这个gen_statem进程都会挂掉。但是throw是一个例外，可以作为所有回调函数的有效返回值。
+- 状态按顺序执行。
+- 状态回调函数StateName/3, 三个参数：第一个是事件类型，第二个是事件，第三个是进程状态数据。
+- 状态回调的返回值最后可以加上ms的超时值，即会保持新的状态这段时间，这段时间之后会触发超时时间，条用StateName(timeout, Name, Data)
+
+
+** 时间类型
+
+#+BEGIN_SRC erlang
+event_type() = 
+    {call, From :: from()} |
+    cast |
+    info |
+    timeout |
+    {timeout, Name :: term()} |
+    state_timeout |
+    internal
+#+END_SRC
+
+- 其中外部事件有call,cast,info，对于calls，需要From指明该给谁回复。call/cast来源都是gen_statem的对应API，info则来源于常规地给gen_statem进程发送的消息。 
+- 还有状态机自己产生的事件类型包括超时信息和internal。 
+- init回调的第四个参数可以返回一个事件{next_event, EventType, EventContent}，然后直接执行状态+事件的状态回调函数。
+- internal可以用来将该时间和其他外部事件类型明确区分。
+
+http://www.0x01f.com/post/OTP_Design_Principle_2/
+

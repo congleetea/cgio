@@ -1,0 +1,179 @@
+#+TITLE:       erlang 节点间的通信
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-04-12 Wed
+#+URI:         /blog/%y/%m/%d/erlang节点间的通信
+#+KEYWORDS:    erlang,nodes,net_kernel,epmd,cluster,distributed
+#+TAGS:        points,erlang
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: 解释erlang节点之间的通信问题
+
+ - 节点怎么识别到对方？
+ - 节点怎么建立联系？
+ - 节点之间的通信包括哪些？
+ - 如何将erlang的自身集群通道和工程的数据通道分离开？
+
+* 节点怎么识别对方
+
+- 节点以分布式模式启动
+
+节点启动的时候如果使用了-name或者-sname，此时节点名为nodename@hostname形式，不以分布式模式启动时名字恒为
+nonode@nohost(当然也可以在命令行中使用net_kernel:start/1转化为分布式节点)。只有以分布式模式启动的时候才
+可以加入集群，而且节点比如同时使用-name或者-sname，不一样也不能加入集群。
+
+- 节点怎么识别对方
+
+每台机器上启动第一个vm的时候都会顺带启动一个后台进程epmd（Erlang Port Mapper Daemon），该进程默认监听
+TCP/IP 4369端口。该端口可以通过下面两种方式进行更改：
+
+#+BEGIN_SRC shell
+//单独启动epmd进程
+$ epmd -dmemon -port 5000
+// epmd随分布式节点启动, -epmd参数指定epmd启动方式，其中的-port端口指定监听端口，-epmd_port指定node连接的epmd端口.
+$ erl -name hello@cong.com -epmd "epmd -port 5000 -daemon" -epmd_port 5000
+#+END_SRC
+
+epmd的端口更改之后，连接虚拟机就要指定这个新的端口，指定方式也有两种方式：
+
+#+BEGIN_SRC shell
+$ erl -name hello@cong.com -epmd_port 5000
+#+END_SRC
+#+BEGIN_SRC text
+ERL_EPMD_PORT=5000
+#+END_SRC
+
+kernel的erl_epmd模块提供epmd协议的封装，向net_kernel模块提供服务。如果net_kernel要连接其他节点的时候，
+就取出节点名称的ip部分，透过erl_epmd建立连接到ip:4369，通过epmd协议来查询想要的foo的端口，然后再用
+ip:port去连接真正的服务。
+
+分布式节点之间是全联通的，也就是nodeA和nodeB建立连接之后，nodeB会介绍已经和其建立连接的所有节点给nodeA，这样彼
+此之间就都会建立联系了, 最后形成一个全联通的网络。
+
+查看在epmd上注册的node有下面的方法：
+
+- 直接通过epmd查看：
+
+#+BEGIN_SRC shell
+$ epmd -names
+name emqttd0 at port 6369
+name ityerpc1 at port 17759
+name emqttd1 at port 19835
+name rabbit at port 25672
+#+END_SRC
+
+- 在erl shell中查看：
+#+BEGIN_SRC shell
+(ityerpc1@127.0.0.1)1> erl_epmd:names().
+{ok,[{"rabbit",25672},
+     {"emqttd1",19835},
+     {"ityerpc1",17759},
+     {"emqttd0",6369}]}
+#+END_SRC
+
+
+各个服务node监听的端口是不一样的，也可以配置kernel参数指定端口范围：
+
+#+BEGIN_SRC shell
+application:set_env(kernel, inet_dist_listen_min, 9100).
+application:set_env(kernel, inet_dist_listen_max, 9105).
+#+END_SRC
+那么该node的端口就会再9100~9105之间，如果要固定为某个端口可以将两个参数设置为一样就行。
+
+* 节点之间怎么建立联系
+
+节点之间的互联只要通过一种方式建立了连接，后面就可以进入分布式系统，成为其中的一个节点了。节点之间的连接主要是
+通过net_kernel来处理。
+
+比如可以通过net_adm:ping(Node).建立连接，如果成功了就会收到pong回应，否则收到pang的失败回应。
+
+也可以通过net_kernel:connect_node(Node).建立连接, net_kernel模块还提供了disconnect_node(Node)函数，用来断开连接。
+
+net_kernel默认会在引用到其它节点时(如rpc:call/5, spawn/4, link/1等)，自动与该节点建立连接，通过
+-dist_auto_connect false选项可以关闭这种行为，如此只能通过net_kernel:connect_node/1手动显式地建立连接。
+
+* 节点之间的通信包括哪些
+
+- 节点之间的时钟信号（确认是否alive）
+节点之间要确定彼此是否alive的，因此会每个一段时间发送一个时钟信号，发送时钟信号的频率可以通过下面两种方式控制：
+
+1 vm.args文件的kernel参数控制：
+#+BEGIN_SRC text
+-kernel net_ticktime 60
+#+END_SRC
+
+2 使用函数net_kernel:set_net_ticktime/1,2可以设置发送时钟的周期值，而获取这个值可以使用net_kernel:get_net_ticktime/0获取。
+
+- rpc传输的数据和指令
+以emqttd为例，连接量较大的时候, 特别是在投递消息的时候都是通过rpc来进行节点之间的投递的，这样rpc的数据量就会很大，如果
+造成了通道的阻塞，就没有办法正常发送确认设备存活的时钟信号，就可能误判为节点已经挂了。
+
+为了解决这个方法，可以将erlang节点间的集群通道和项目的数据通道分离开，使用两个端口，这样就必须不影响了。[[https://github.com/priestjim/gen_rpc][gen_rpc]] 这个项目
+就是做了这个事情，可以参考。
+
+- mnesia的数据同步
+
+
+* gen_rpc原理
+
+核心原理就是mailbox-per-node，也就是针对集群中的每个节点产生相应的进程，针对每个节点有一个相应的信箱。这样就不会所有数据
+都阻塞vm的分布式端口。
+
+- 当一个client要发送数据到远端节点RemoteNode时，需要查询以RemoteNode命
+  名的进程。
+- 如果RemoteNode命名的进程没有找到，会向dispatcher进程请求一个新的进程，
+  而dispatcher会通过合适的client supervisor生成一个新的进程。
+- client进程会连接远端节点的gen_rpc server。向其发送请求等待回应。因此
+  gen_rpc server是接收所有节点请求的进程。
+- gen_rpc server会请求acceptor supervisor进程启动一个新的acceptor，让
+  他处理新的socket连接。
+- acceptor接管新的socket连接并通过cookie认证client。
+
+** gen_rpc的各个进程状态切换
+
+- server 之 gen_rpc_server_tcp
+
+#+BEGIN_SRC plantuml :file ./images/gen_rpc_server_tcp.png  :cmdline -charset UTF-8
+listen ->  waiting_for_connection: ListSock
+waiting_for_connection -> waiting_for_connection:  action: {internal,accept}
+connection -> waiting_for_connection: 一个node的连接.
+waiting_for_connection -> acceptor: start a acceptor
+waiting_for_connection -> acceptor: 转移Sock的控制权给acceptor
+waiting_for_connection -> acceptor: set_socket发送{socket_ready,Socket}触发acceptor状态变化
+waiting_for_connection -> waiting_for_connection: 继续等待下一个node的连接。
+#+END_SRC
+
+- server 之 acceptor
+
+#+BEGIN_SRC plantuml :file ./images/acceptor.png  :cmdline -charset UTF-8
+waiting_for_socket -> waiting_for_auth: action: {socket_ready,Socket}
+waiting_for_auth -> waiting_for_data: action: info(auth via cookie)
+waiting_for_data -> waiting_for_data: 保持接收数据状态
+#+END_SRC
+
+如果收到的request是不需要回复的（如cast等）直接spawn一个进程执行即可。如果是需要回复的（比如call, async_call）
+则会派生两个进程，call_worker, [self(), CallType, RealM, F, A, Caller])，并将acceptor的Pid（self()）作为参数
+带入，在call_worker中再spawn_monitor一个进程，同时进行monitor： {MPid, MRef} = erlang:spawn_monitor(?MODULE, call_middleman, [M,F,A])
+。当call_middleman执行完之后执行exit，这样监控进程call_worker就会收到退出信号: {'DOWN', ....}, 再由call_worker
+通过!直接发回给acceptor。acceptor 收到之后通过socket将结果返回发送请求的node。
+
+#+BEGIN_SRC erlang
+call_worker(Server, CallType, M, F, A, Caller) ->
+    {MPid, MRef} = erlang:spawn_monitor(?MODULE, call_middleman, [M,F,A]),
+    receive
+        {'DOWN', MRef, process, MPid, {call_middleman_result, Res}} ->
+            Server ! {CallType, Caller, Res};
+        {'DOWN', MRef, process, MPid, AbnormalExit} ->
+            Server ! {CallType, Caller, {badrpc, AbnormalExit}}
+    end.
+#+END_SRC
+
+- client
+
+当我们通过gen_rpc:call/cast等等调用的时候，会调用gen_rpc_client模块处理，这里会首先查询是否有要连接的node对应的client进程，如果没有就调用
+dispatcher进程生成一个，再通过该进程将任务发送到远端节点。
+
+本节点需要连接远端节点node1时会给该node1生成一个client(gen_server)，通过该client去连接node1的tcp_server_port(因此，在配置的时候，tcp_server_port是
+本节点的端口，tcp_client_port是远端节点的tcp_server_port)。连接之后立刻进行认证。这样node1就会执行waiting_for_auth函数了。
+
+client和server都有一个不活跃时间，该时间过后进程会被stop掉。

@@ -1,0 +1,57 @@
+#+TITLE:       服务器日志收集
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-02-27 Mon
+#+URI:         /blog/%y/%m/%d/服务器日志收集
+#+KEYWORDS:    log,fluentd,collector
+#+TAGS:        point
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: Server的日志处理
+** 语法
+@<command> <command_name>
+
+后面接对这个command的参数设置。 
+
+*** source
+- 指定事件的来源, 将事件提交给Fluentd的路由引擎, 必须要有type参数.
+| type | 指定使用哪个input plugin，常用http,forward |
+
+
+*** match
+- 通配事件
+事件的标识中间用.分隔成多级
+| 通配类型 | 描述         |
+|----------+--------------|
+| *        | 匹配单级     |
+| **       | 匹配多级     |
+| {X,Y,Z}  | 匹配其中一个 |
+
+ *Note*, 一个match里面只能有一个type，否则match不可用。如果要把一个event匹配多个类型，可以使用 [[http://docs.fluentd.org/v0.12/articles/out_copy][out_copy]]
+插件。
+
+- 匹配顺序
+如果有多个匹配规则，主要匹配上一个就不会再匹配下面的规则，所以要把精细的匹配规则放在前面，
+最后放发范围的通配匹配规则。
+
+*** filter
+这是消息处理管道，消息会经过filter的处理之后最后再输出。
+#+BEGIN_SRC text
+Input -> filter 1 -> ... -> filter N -> Output
+#+END_SRC
+
+*** system
+设置系统参数:
+| log_level                                                            |
+| suppress_repeated_stacktrace                                         |
+| emit_error_log_interval                                              |
+| suppress_config_dump                                                 |
+| without_source                                                       |
+| process_name (only available in system directive. No fluentd option) |
+
+*** label
+用于分组过滤和输出。
+
+** mongo插件
+http://docs.fluentd.org/v0.12/articles/out_mongo
+

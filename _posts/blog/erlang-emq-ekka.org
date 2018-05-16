@@ -1,0 +1,296 @@
+#+TITLE:       emq 的集群功能实现 ekka
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-11-10 Fri
+#+URI:         /blog/%y/%m/%d/emq的集群功能实现-ekka
+#+KEYWORDS:    erlang,cluster,emq,etcd
+#+TAGS:        points,erlang
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: 分析emq集群实现-ekka
+
+* 概述
+emq2.3版本实现了emq的多种可选择的集群方案(通过ekka依赖来实现), 我们选择etcd的实现方式，所以重点通过etcd来分析源码。
+
+* ekka启动过程
+在ekka.app.src文件中，找到app启动的入口是ekka_app.erl。ekka_app:start()启动了ekka_sup。在ekka_sup中我们可以看到
+受监控的几类服务：
+#+BEGIN_SRC erlang
+init([]) ->
+    Childs = [?CHILD(ekka_cluster_sup, supervisor),
+              ?CHILD(ekka_membership, worker),
+              ?CHILD(ekka_node_monitor, worker)],
+    {ok, {{one_for_all, 10, 100}, Childs}}.
+#+END_SRC
+
+有三类服务，都是调用模块中的start_link启动：
+
+1. ekka_cluster_sup
+
+2. ekka_membership
+
+3. ekka_node_monitor
+
+#+CAPTION: ekka进程树 
+#+LABEL: fig:SED-HR4049
+[[./images/ekka_process_tree.png]]
+
+依次看这几个服务。
+
+** ekka_cluster_sup
+该supervisor下面没有载入任何worker，需要的时候会调用start_child(Mod, Args)来启动。
+
+** ekka_membership
+该模块负责集群中各个节点之间的交互，各类节点的查询等等，监控。
+首先会创建一个ets表membership：
+#+BEGIN_SRC erlang
+-type(member_status() :: joining | up | healing | leaving | down).
+
+-type(member_address() :: {inet:ip_address(), inet:port_number()}).
+
+-record(member, { node   :: node(),
+                  addr   :: member_address(),
+                  guid   :: ekka_guid:guid(),
+                  status :: member_status(),
+                  mnesia :: running | stopped | false,
+                  ltime  :: erlang:timestamp()
+                }).
+
+-type(member() :: #member{}).
+
+  ets:new(membership, [ordered_set, protected, named_table, {keypos, 2}]),
+#+END_SRC
+表中保存的就是集群中所有成员的信息，包括节点名node，地址，状态status，mnesia状态，启动时间。
+并首先就本node信息插入其中。
+
+** ekka_node_monitor
+
+该进程在启动的时候通过net_kernel:monitor_nodes订阅了集群中节点的上下线信息。也就是当一个新的节点加入时会收到nodeup消息，反之，节点掉线之后也会收到nodedown消息。
+其中，只订阅可见节点的状态改变信息； 当nodedown的时候会发原因也在消息{nodedown_reason, Reason}中一起发送。
+
+同时，该进程也订阅mnesia的所有系统信息。
+
+#+BEGIN_SRC erlang
+  net_kernel:monitor_nodes(true, [{node_type, visible}, nodedown_reason]),
+  {ok, _} = mnesia:subscribe(system),
+  lists:foreach(fun(N) -> self() ! {nodeup, N, []} end, nodes() -- [node()]),
+  {ok, ensure_heartbeat(#state{autoheal  = ekka_autoheal:init(),
+                               autoclean = ekka_autoclean:init()})}.
+#+END_SRC
+
+完了会查询所有的node，然后针对每个node给本进程发送一条消息{nodeup, Node, []}， 然后进程调用ekka_membership:nodeup(Node)处理nodeup消息。
+
+ekka_membership 收到 Node 的 nodeup 之后，会插入或者修改该节点的 status 信息, 然后给monitor进程发送一条node up的信息。所有的node都处理完之后，member表中就记录了集群中所有节点的信息了。
+
+ekka_autoheal:init()设置autoheal功能，ekka_autoclean:init()设置定时清理状态为down的节点。
+
+*** autoclean
+#+BEGIN_SRC erlang
+maybe_clean(#member{node = Node, ltime = LTime}, Expiry) ->
+    case expired(LTime, Expiry) of
+        true  -> ekka_cluster:force_leave(Node);
+        false -> ok
+    end.
+#+END_SRC
+
+查出所有#memeber.status=down的节点，检查now - #member.ltime > expireTime， 
+
+每次检查完之后重置定时器，隔一段时间再次检测。
+
+*** heartbeat 
+heartbeat的任务就是定时给所有或者的节点发送一条消息。
+
+#+BEGIN_SRC erlang
+ensure_heartbeat(State = #state{heartbeat = undefined}) ->
+    Interval = rand:uniform(2000) + 2000,
+    State#state{heartbeat = run_after(Interval, heartbeat)};
+#+END_SRC
+Interval加了一个随机数是为了检查心跳的时间错开，然后发送heartbeat消息。
+
+#+BEGIN_SRC erlang
+handle_info(heartbeat, State) ->
+    AliveNodes = [N || N <- ekka_mnesia:cluster_nodes(all),
+                       lists:member(N, nodes())],
+    lists:foreach(fun(Node) ->
+                    cast(Node, {heartbeat, node()})
+                  end, AliveNodes),
+    {noreply, ensure_heartbeat(State#state{heartbeat = undefined})};
+#+END_SRC
+
+* 集群实现
+前面对ekka这个依赖有了大致的了解。下面从emqttd中来看集群的实现。
+
+1. 
+emqttd_app是emqttd启动的总入口，在这里启动了ekka。
+
+#+BEGIN_SRC erlang
+  ekka:start(),
+  ...
+  start_autocluster(),
+#+END_SRC
+
+2. ekka:start()
+#+BEGIN_SRC erlang
+ekka.erl:
+
+  start() ->
+      ekka_mnesia:start(), {ok, _Apps} = application:ensure_all_started(ekka), ok.
+#+END_SRC
+主要是启动和mneisa有关的服务和依赖的app, mnesia是erlang集群中重要的角色, 集群的很多操作都依靠该模块中的函数来实现。
+
+3. start_autocluster()
+start_autocluster函数开始设置两个回调函数。表示为属性prepare，reboot。前者表示执行集群前执行的预备操作，reboot是集群操作之后
+重启需要重启的服务。akka:autocluster函数指定集群完毕之后要操作的函数。
+
+#+BEGIN_SRC erlang
+start_autocluster() ->
+    ekka:callback(prepare, fun emqttd:shutdown/1),
+    ekka:callback(reboot,  fun emqttd:reboot/0),
+    ekka:autocluster(?APP, fun after_autocluster/0).
+
+after_autocluster() ->
+    emqttd_plugins:init(),
+    emqttd_plugins:load(),
+    start_listeners().
+#+END_SRC
+
+集群的重点就在ekka:autocluster/2函数了。
+#+BEGIN_SRC erlang
+autocluster(App, Fun) ->
+    case ekka_autocluster:aquire_lock() of
+        ok ->
+            spawn(fun() ->
+                    group_leader(whereis(init), self()),
+                    wait_application_ready(App, 5),
+                    try ekka_autocluster:discover_and_join(Fun)
+                    catch
+                        _:Error -> lager:error("Autocluster exception: ~p", [Error])
+                    end,
+                    ekka_autocluster:release_lock()
+                  end);
+        failed ->
+            ignore
+    end.
+#+END_SRC
+执行集群操作之前置锁（给一个变量置true, 表示当前正在进行集群操作），集群结束之后解锁。置锁之后不能进行额外的集群操作。
+
+具体步骤是：派生一个进程执行集群操作，并把该进程的group_leader设置为init进程，然后等待App运行成功之后通过设置的集群方式
+进行服务发现和join。集群完成之后释放集群锁。
+
+** ekka_autocluster:discover_and_join(Fun)
+
+Fun就是after_autocluster函数。
+
+#+BEGIN_SRC erlang
+discover_and_join(Fun) ->
+    with_strategy(
+      fun(Mod, Options) ->
+        case Mod:lock(Options) of
+            ok -> 
+                discover_and_join(Mod, Options),
+                log_error("Unlock", Mod:unlock(Options));
+            ignore ->
+                timer:sleep(rand:uniform(3000)),
+                discover_and_join(Mod, Options);
+            {error, Reason} ->
+                ?LOG(error, "AutoCluster stopped for lock error: ~p", [Reason])
+        end
+      end),
+    run_callback(Fun).
+#+END_SRC
+
+with_strategy/1通过配置的集群方式进行集群操作，最后执行after_autocluster回调函数。
+
+Mod是集群方式对应的模块，如果是etcd，就是ekka_autocluster_etcd, Options是etcd对应的参数。
+
+Mod:lock() 设置锁：
+
+Req={"http://192.168.0.45:2379/v2/keys/emqcl/emqcl/lock",[],"application/x-www-form-urlencoded","ttl=30&prevExist=false&value=emq%40192.168.1.100"}
+置锁成功之后，执行discover_and_join(Mod, Options)， join完之后解锁：Mod:unlock(Options)。
+
+#+BEGIN_SRC erlang
+discover_and_join(Mod, Options) ->
+    case Mod:discover(Options) of
+        {ok, Nodes} ->
+            maybe_join([N || N <- Nodes, ekka_node:is_aliving(N)]),
+            log_error("Register", Mod:register(Options));
+        {error, Reason} ->
+            ?LOG(error, "Discovery error: ~p", [Reason])
+    end.
+#+END_SRC
+首先discover从etcd上获取集群中所有的节点，执行join，然后在etcd上注册。
+
+#+BEGIN_SRC erlang
+maybe_join([]) ->
+    ignore;
+
+maybe_join(Nodes) ->
+    case ekka_mnesia:is_node_in_cluster() of
+        true  -> ignore;
+        false -> join_with(find_oldest_node(Nodes))
+    end.
+#+END_SRC
+
+join要找到一个集群中的节点，这里通过find_oldest_node(Nodes)找到最早启动的节点。然后join_with(Node)调用ekka_cluster:join(Node):
+
+#+BEGIN_SRC erlang
+join(Node) when Node =:= node() ->
+    ignore;
+join(Node) when is_atom(Node) ->
+    case {ekka_mnesia:is_node_in_cluster(Node), ekka_node:is_running(Node, ekka)} of
+        {false, true} ->
+            prepare(join), ok = ekka_mnesia:join_cluster(Node), reboot();
+        {false, false} ->
+            {error, {node_down, Node}};
+        {true, _} ->
+            {error, {already_in_cluster, Node}}
+    end.
+#+END_SRC
+只有节点没有在集群中，同时该node还alive才会执行节点join。步骤就是先执行prepare函数，把emq依赖的app全部shutdown，执行join，然后重启。
+
+#+BEGIN_SRC erlang
+join_cluster(Node) when Node =/= node() ->
+    %% Stop mnesia and delete schema first
+    ensure_ok(ensure_stopped()),
+    ensure_ok(delete_schema()),
+    %% Start mnesia and cluster to node
+    ensure_ok(ensure_started()),
+    ensure_ok(connect(Node)),
+    ensure_ok(copy_schema(node())),
+    %% Copy tables
+    copy_tables(),
+    ensure_ok(wait_for(tables)).
+#+END_SRC
+
+join具体步骤是：先stop mnesia，删除本地的schema文件，然后重启mneisa，连接主节点，复制schema，复制其他表。这样join就完成了。
+
+不要忘了前面说的最后还要在etcd上注册和执行after_autocluster。
+
+** 新节点的注册
+#+BEGIN_SRC erlang
+register(Options) ->
+    case etcd_set_node_key(Options) of
+        {ok, _Response} ->
+            ensure_node_ttl(Options);
+        {error, Reason} ->
+            {error, Reason}
+    end.
+#+END_SRC
+注册主要是两个步骤，一个是将node写到etcd上。然后启动一个进程实现ttl，保证每隔一段时间更新一次信息。
+
+#+BEGIN_SRC erlang
+ensure_node_ttl(Options) ->
+    Ttl = proplists:get_value(node_ttl, Options),
+    MFA = {?MODULE, etcd_set_node_key, [Options]},
+    case ekka_cluster_sup:start_child(ekka_node_ttl, [Ttl, MFA]) of
+        {ok, _Pid} -> ok;
+        {error, {already_started, _Pid}} -> ok;
+        Err = {error, _} -> Err
+    end.
+#+END_SRC
+ekka_node_ttl是一个有限状态机，以设置的ttl时间的一半向etcd定期更新节点信息。
+
+* 步骤总结
+#+BEGIN_SRC plantuml :file ./image/autocluster.png  :cmdline -charset UTF-8
+
+#+END_SRC                                                                                                                                                                             

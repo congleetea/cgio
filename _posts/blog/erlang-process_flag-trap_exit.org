@@ -1,0 +1,96 @@
+#+TITLE:       erlang 的 trap_exit
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-04-07 Fri
+#+URI:         /blog/%y/%m/%d/erlang的trap_exit
+#+KEYWORDS:    erlang,process_flag,trap_exit
+#+TAGS:        points,erlang
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: Erlang的trap_exit与监控
+
+
+* 进程标识 trap_exit 的作用
+
+  普通的进程一旦需要除了normal的异常信息就会退出，如果在启动的时候加上process_flag(trap_exit, true), 进程就会接受到
+  进程退出的消息，进程监控了这个消息就可以避免进程死亡。
+
+  #+BEGIN_SRC erlang
+  -module(test).
+  -compile(export_all).
+  
+  start() ->
+      Pid = spawn(
+              fun() ->
+                      process_flag(trap_exit,true)
+                      do_loop()
+              end
+             ),
+      register(test, Pid).
+  
+  do_loop()->
+      receive
+          Msg ->
+              io:format("recv ~w~n", [Msg])
+      end,
+      do_loop().
+  #+END_SRC
+  
+  #+BEGIN_SRC shell
+  $ erlc test.erl 
+  $ erl -pa .
+  Erlang/OTP 19 [erts-8.2] [source] [64-bit] [smp:4:4] [async-threads:10] [hipe] [kernel-poll:false]
+  
+  Eshell V8.2  (abort with ^G)
+  1> test:start().
+  true
+  2> whereis(test).
+  <0.60.0>
+  3> exit(whereis(test),normal).
+  recv {'EXIT',<0.58.0>,normal}
+  true
+  4> whereis(test).             
+  <0.60.0>
+  5> exit(whereis(test),"die"). 
+  recv {'EXIT',<0.58.0>,[100,105,101]}
+  true
+  6> whereis(test).            
+  <0.60.0>
+  7> exit(whereis(test),kill). 
+  true
+  8> whereis(test).           
+  undefined
+  9> 
+  #+END_SRC
+
+  从上面我们看到不管发送normal和其他除了kill的其他信号，进程都没有被杀死，而是收到{'EXIT',<0.58.0>,[100,105,101]}的信号，
+  如果要强制杀死进程，使用kill就可以了。
+
+  如果没有process_flag(trap_exit,true), 我们看看：
+
+  #+BEGIN_SRC shell
+  Eshell V8.2  (abort with ^G)
+  1> test:start().
+  true
+  2> whereis(test).
+  <0.60.0>
+  3> exit(whereis(test), normal).
+  true
+  4> whereis(test).              
+  <0.60.0>
+  5> exit(whereis(test), "die"). 
+  true
+  6> whereis(test).             
+  undefined
+  7> 
+  #+END_SRC
+
+  这时候我们看到收到"die"的exit消息之后，进程就死掉了，而且不会捕捉到进程的任何异常信息。
+
+  对于之前的otp版本，普通进程收到normal退出消息也会使其死亡，但是19.1除了normal才会让进程死亡。
+
+* 使用trap_exit可以作为监督者，和supervisor有什么区别
+
+  supervisor有重启机制，使用trap_exit可以检测进程的异常信息，避免进程自身死亡，但是他不会重启他的子进程，在emqttd中，
+  esockd_connection_sup就是使用process_flag(trap_exit,true)来启动的，虽然具有监督功能，但是不会重启子进程connection，
+  显然，connection就是不能重启的。

@@ -1,0 +1,215 @@
+#+TITLE:       tech-lora
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-05-23 Tue
+#+URI:         /blog/%y/%m/%d/tech-lora
+#+KEYWORDS:    lora
+#+TAGS:        tech
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: <TODO: insert your description here>
+
+* 简介
+- 终端设备node与网关呈星型拓扑结构，网关和一个后端中心网络服务器通过IP连接相连。
+- 终端设备和一个或者多个网关通过单跳连接。
+- 通常所有的通信都是双向的，尽管期望的是终端节点和服务器上行为主。
+- 节点和网关的通信可以选择不同的频道和传输速率(0.3kbps~50kpbs)，传输速率的选择需要在通信距离和消息延时之间做出权衡。使用不同的速率通信，彼此之间并不影响。
+- 为了最大化终端节点的电池寿命和网络的接入量，网络可以通过自适应速率(ADR)方式单独管理每个终端设备的速率和输出。
+- 终端节点可以在满足下面三点规则前提下，任何时候通过任何可用的信道，使用任何可用的速率发送数据。发送占空比和发送时间是和地区有关的。
+ 1 终端每次发送使用伪随机的方式改变信道，频道的多样性使得对干扰更鲁棒。
+ 2 终端遵守最大的发送占空比。
+ 3 终端遵守最大的发送时间。 
+- 不同的操作参数是基于不同的地区的。比如每个子带的最大占空比和停留时间。
+
+* lora终端的三种类型
+- 所有的lora终端设备都至少要实现Class A的功能。其他也要兼容Class A, 因此A类是最基础的。
+
+- class A: 双向通信的实现是通过终端节点的上行发送之后紧接着两个短的接收时间窗口。
+- class A: 发送时间槽由终端设备基于自己在随机时间基础上的最小变化的通信需要来确定。 （ALOHA is a system for coordinating and arbitrating access to a shared communication Networks channel）
+- class A: 该类设备功耗最低，只有在发送上行包之后需要服务器的下行数据。任何服务器的下行通信都要等到到设备下一次发送上行数据之后才可以。因此不适合控制类设备。 
+
+- class B: 该类设备有可规划的接收槽。即比A类发送上行包之后才有接收槽的情况，B类还会在规定的时间打开额外的接收槽。
+- class B: 终端设备要一个调度时间打开接收槽，就需要终端设备从网关接收一个时间同步的信标，这使服务器知道终端设备什么时候在监听。  
+
+- class C: 几乎是连续打开接收窗口的，指示再发送的时候关闭接收窗口
+- class C: 最耗电但是通信延时最小。 
+
+* 物理消息格式(Class A)
+区分上下行消息。包的最外层。
+- 上行数据由终端设备发送，经过一个或者多个网关的中继到达服务器。
+- 上行包： Preamble + PHDR+PHDR_CRC + PHYPayload + CRC
+- 下行数据由服务器发送，只经过一个网关到达某个终端节点。 
+- 下行包： Preamble + PHDR + PHDR_CRC + PHYPayload，没有用payload的完整校验是在占空比受限的情况下尽可能地让数据短一些。
+- 接收窗口：发送完上行包之后打开两个短暂的接收窗口，接收窗口的启动时间以发送上行包结束时为参考时间。
+- 第一个接收窗口RX1使用的频率是上行频率的函数，使用的速率是上行速率的函数。打开时间是上行结束后RECEIVE_DELAY秒(20ms误差)。上下行速率和地区有关。
+- 第二个接收窗口RX2使用固定配置的频率和速率，在上行结束后打开RECEIVE_DELAY2秒(20ms误差)（也就是说两个窗口有段时间是同时打开的），频率和速率可以通过MAC指令修改，默认是按地区指定的。 
+- 接收窗口的长度至少要终端设备的接收模块能有效检测下行包的包头。
+- 只要在其中一个接收窗口，接收模块检测到包头，那接收模块就保持活跃状态，直到下行包解调完成。如果一个数据帧被检测到，地址和MIC校验之后的数据帧是给终端节点的，那终端就不会开启第二个接收窗口。
+- If the network intends to transmit a downlink to an end-device, it will always initiate the transmission precisely at the beginning of one of those two receive windows. 
+- 终端在没有收到上一个上行报的回复，或者上一次发送的第二个接收窗口过期的情况下，不应该再发送上行报。
+
+* MAC消息格式
+** 数据结构
+
+#+CAPTION: LoRa协议 
+#+LABEL: fig:SED-HR4049
+[[./images/lora-protocol.png]]
+
+
+MAC消息在物理层的PHYPayload里面。PHYPayload的上下行数据都以MHDR开始，以MIC结束。
+- PHYPayload-MACPayload: MHDR + MACPayload + MIC; 
+- PHYPayload-JoinReq: MHDR + Join-Request + MIC
+- PHYPayload-JoinResp: MHDR + Join-Response + MIC
+- MACPayload里面有frame信息，帧没有完整码校验。MACPayload就是所谓的数据帧。
+- MACPayload: FHDR + FPort + FRMPayload; FHDR: DevAddr(设备地址) + FCtrl(控制位) + FCnt(帧计数) + FOpts(选项)
+- MType指定消息类型，有六种：
+ | MType                                    | MAC头中指定消息类型，比如Join-Req，Join-Accept等六种类型。 |
+ |------------------------------------------+------------------------------------------------------------|
+ | Join-Request,Join-accept                 | OTAA时使用。                                               |
+ | confirmed-data(U/D),unconfirmd-data(U/D) | 数据类消息                                                 |
+ | proprietary                              |                                                            |
+- 下行FCtrl: ADR(7) + RFU(6) + ACK(5) + FPending(4) + FOptsLen(3..0) 
+- 上行FCtrl: ADR(7) + ADRACKReq(6) + ACK(5) + RFU(4) + FOptsLen(3..0)
+- Major指定数据帧主版本，解码时使用。有两种版本：LoRaWAN R1和RFU。
+
+** ADR(ADR,ADRACKReq)
+- ADR: FCtrl中的ADR和ADRACKReq：通过置ADR位激活自使用功能；ADRACKReq用于在没有收到下行包时通过置位要求服务器给出确认，超过限定次数没有回应就会调低速率重连。
+- ADR: ADR可以通过服务器或者终端设备设置或复位，为了电池寿命和网络接入量的考虑，建议ADR模式都打开。
+- ADR: 如果给终端节点优化的速率高于终端节点可用的速率，那节点就要周期性地验证服务器是否仍旧接收上行包。每次上行包计数器都会增加（重复不增），设备增加ADR_ACK_CNT计数器，当ADR_ACK_CNT>=ADR_ACK_LIMIT还没有收到下行包，用于确认ADR的 ADRACKReq位就会使能。服务器需要在下一个ADR_ACK_DELAY帧内发送给一个下行帧，设备收到下行帧会重置ADR_ACK_CNT。如果经过 ADR_ACK_LIMIT + ADR_ACK_DELAY还没有收到回复，设备将会调低发送速率重新获取连接，每次ADR_ACK_DELAY到了都会一步一步调低速率。(这样的结果是离gateway越远的设备发送速度会越低，越近的会越高。)
+- 如果设备使用最低的可用速率，ADRACKReq就不应该设置了，因为设置了也不能再调低来改进发送距离了。
+
+** ACK(消息确认位和确认步骤)
+- 接收者收到一个confirmed消息都需要一个ACK置位的数据帧进行回复。
+- confirmed消息没有收到ACK回复需要重新发送。重发的数量和时间各种终端设备不一样。
+- 如果发送者是终端设备，服务器应该在设备的其中一个接收窗口发送确认数据包。
+- 如果发送者是gateway，终端设备可以灵活地发送一个确认数据包。 
+- 只对最近接收到的一条消息发送确认消息，并且确认消息不会重新发送(否则就会造成无限循环了, 而且也没有必要，因为发送方如果没有收到确认消息还会重发的, 到时会给重发这条消息发送确认数据)。
+- 终端设备有两种方式发送服务器需要的确认包：一是收到需要确认的消息立刻发送仅含有确认信息的消息给服务器；二是等待下一次发送数据包的时候将这一次的确认信息加在里面。
+
+** FPending(只有下行有)
+- 只有下行包有
+- 表示gateway还有数据要发送，要求终端设备尽快通过发送另一个上行数据来来开另外的时间窗口。
+
+** FCnt(帧计数器)
+- 针对每个终端设备，有两个计数器跟踪上下行数据的个数(FCntUp, FCntDown)。
+- 设备入网之后，初始状态设备端和服务器的这两个计数器都置为0。
+- 随后，发送端每发送一个就将相应计数器增1。重发的信息或者没有收到确认信息的confirmed消息不计数。
+- 接收端会同步收到的消息提供的计数值，并和已存在的计数值比较，如果差值大于MAX_FCNT_GAP说明丢失的消息较多，后面的消息就会被丢弃。
+- LoRaWAN允许16bits或32bits的帧计数器, 需要通过out-of-band的方式通知服务器计数器使用多少位数。如果使用16bits，16bits的值就是计数器的值，如果使用32bits,那就是32位中的低16bits有效。
+
+** Frame Options(FCtl中的FOptsLen和FOpts)
+- FCtl中的FOptsLen指明帧中的FOpts长度。FOpts使用最长15个字节来传输MAC指令。
+- 如果FOptsLen>0说明FOpts有MAC指令。如果FOpts有指令，那么FPort要么不存在要么不为0(总之不能是0)。
+- MAC指令不能同时在FOpts和frame的payload中出现。如果出现，设备将忽略此消息。
+
+** Port(FPort)
+- 如frame的payload为空，FPort必须有。
+- 如果FPort=0标识FRMPayload仅仅包含MAC指令,此时FOpts必须不包含MAC指令，FOptLen为0，FPort如果是1~233这些是运用指定的(同时FOpts包含MAC指令)，244表示MAC层测试协议。
+
+* MAC指令
+一个MAC指令包含一个字节的CID，后面跟着指令相关的序列，如果没有则为空。
+
+- 0x02: LinkCheckReq
+由终端发送，用以终端验证网络连通性。没有payload
+
+- 0x02: LinkCheckAns
+由网关发送，作为终端LinkCheckReq的响应。payload包含指示终端接收质量的接收信号强度估计值(由两个字节组成)。
+
+#+CAPTION: LinkCheckAns 
+#+LABEL: fig:SED-HR4049
+[[./images/lora-linkcheckans.png]]
+
+Margin(demodulation margin解调余量): 一个字节表示，8位无符号整数，范围0~254表示上次成功接收LinkCheckReq指令的余量（单位dB）
+0表示frame was received at the demodulation floor(0 dB or no margin).
+
+GwCnt是一个数值，表示有多少gateway接收到了上个LinkCheckReq指令。
+
+- 0x03: LinkADRReq
+由gateway发出, 网络服务器要求终端执行rate adaptation。三个字节表示（DataRate_TXPower:1bytes, ChMask:2byte, Redudancy:1byte）
+
+第一个字节高四位表示DataRate，低四位表示TXPower(TX output power)。（都与LoRaWAN地区参数相关）。TXPower表示设备应该在这个最大传输功率下工作。
+
+ChMask(channel mask)编码了可用的上行通道(两个字节可表示16个通道)，置为1的位表示该通道可以使用，（具体能否使用要看该通道能否允许终端当前的速率.）,0表示终端应该避免使用这些通道。
+
+Redudancy(RFU:7,ChMaskCntl:6~4,NbTrans:3~0)一个字节表示。 *NbTrans* 每个上行包发送的次数，只适用于unconfirmed上行包，默认是1（所有unconfirmed上行包单次发送）， 
+有效范围1~15，如果是0则使用默认值。这参数可以给network manager控制一个节点上行的redundancy，从而达到一定的QoS。 *ChMaskCntl* 控制ChMask指定的channel的使用。
+
+- 0x03: LinkADRAns
+由终端设备发出, 回应LinkADRReq。一个字节表示(RFU:7~3,PowerACK:2, DataRateACK:1, ChannelMaskACK:0)。
+
+ChannelMaskACK: bit=0标识未使用指定通道，bit=1表示使用指定通道。
+
+DataRateACK: 是否成功使用指定的DataRate。
+
+PowerACK: 是否成功使用指定的发射功率。
+
+- 0x04: DutyCycleReq
+gateway发送。用来限制一个终端的最大aggregated transmit duty cycle，The aggregated transmit duty cycle corresponds to the transmit duty cycle over all sub-bands.
+一个字节表示（RFU:7~4, MaxDCycle:3~0）, 最大aggregated transmit duty cycle = 1/(2^MaxDCycle)， MaxDCycle有效值0~15， 0表示没有限制。
+
+- 0x04: DutyCycleAns
+终端发送。回应DutyCycleReq，没有payload。
+
+- 0x05: RXParamSetupReq
+gateway发送。该指令允许改变RX2接收窗口的频率和data rate, 该命令也可以设置上行和RX1下行速率的偏移offset。
+
+四个字节表示：
+ 
+ 
+
+- 0x05: RXParamSetupAns
+  终端发送。
+
+- 0x06: DevStatusReq
+  gateway发送。gateway向设备请求终端设备状态信息。
+
+- 0x06: DevStatusAns
+  终端发送。
+
+- 0x07 NewChannelReq
+  gateway发送。创建通道。
+
+- 0x07 NewChannelAns
+  终端发送。
+
+- 0x08 RXTimingSetupReq
+  gateway发送。配置TX上行端和第一个接收槽打开的延迟。
+
+- 0x08 RXTimingSetupAns
+  终端发送。
+
+- 0x09 TxParamSetupReq
+  gateway发送。只在某些地区使用。
+
+- 0x09 TxParamSetupAns
+  终端发送。
+
+ 
+- 0x0A DlChannelReq
+  gateway发送。修改通道。
+
+- 0x0A DlChannelAns
+  终端发送。
+
+
+* 终端激活
+
+
+* 代码实现
+loraserver是怎样和lora节点交流的？
+
+** 上行
+
+- gateway（网关）像一个分布式天线。节点发送LoRaWAN数据帧，可能会被一个或者多个gw收到，gw的功能很简单，只是在节点和loraserver之间向前透传数据.
+- 服务器首先过滤可能被多个gw收到的同一条消息；然后确认数据完整性并解密运用数据，最后比较FCnt Up。
+
+** 下行
+*** A类设备
+A类设备只在发送一个上行包之后一段时间监听下行的数据。这是最基本的模式。
+- 服务器一旦收到上行包之后，立刻往最近的网关发送下行包，gw把下行报直接送给设备。
+-   
+
+*** C类设备
+- 服务器并不知道设备是A类还是C类。只是假设运用这道这些。
+- 初始时，一个下行运用要设置必要的下行时间，他可以是一个特定的时间戳或者一个immediately标志。
+

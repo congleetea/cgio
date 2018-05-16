@@ -1,0 +1,16 @@
+#+TITLE:       linux网络
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-04-27 Thu
+#+URI:         /blog/%y/%m/%d/linux网络
+#+KEYWORDS:    ops
+#+TAGS:        ops
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: net
+
+- ethtool
+该命令用于获取以太网卡的配置信息，或者修改这些配置。这个命令比较复杂，功能特别多。
+
+http://man.linuxde.net/ethtool
+

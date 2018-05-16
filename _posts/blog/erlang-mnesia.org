@@ -1,0 +1,106 @@
+#+TITLE:       Erlang 的数据库 Mnesia
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-04-01 Sat
+#+URI:         /blog/%y/%m/%d/erlang的mnesia小记
+#+KEYWORDS:    erlang,mnesia
+#+TAGS:        points,erlang
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: Erlang的Mnesia记录
+
+* mnesia新建表
+** 表的类型{type, Type}
+和ets一样：set(default), order_set(目前不支持disc_only_copies), bag, 但是没有duplicate_bag.
+
+** 表的权限 
+{access_mode, Atom}: Atom 为 read_write(default), read_only.
+
+** 存储方式
+- {disc_copies,  Nodelist}
+- {disc_only_copies,  Nodelist}
+- {ram_copies,  Nodelist}
+- {storage_properties,  [{Backend,  Properties}]
+
+  设置后端存储的属性, Backend目前可以是ets or dets。Properties 是在创建表的时候发给后端的选项列表，但是不能包含mnesia已经使用的属性(比如type，named_table) 
+  例如：
+#+BEGIN_SRC erlang
+    mnesia:create_table(table, [{ram_copies, [node()]}, {disc_only_copies, nodes()},
+           {storage_properties,
+            [{ets, [compressed]}, {dets, [{auto_save, 5000}]} ]}])
+#+END_SRC
+
+** 是否同步 
+{local_content, Bool}: 默认false
+
+** 索引
+{index, Intlist}
+
+** 一致性 
+{majority, Flag}: 当置为true的时候，所有的非脏更新操作只有在大部分table replicas都得到这个comment的时候，才算成功，否则该操作终止。当在分区表中使用的时候，每个表都要有这个设置。
+
+ 
+* 
+** mnesia的属性
+通过mnesia:system_info(all)或者mnesia:system_info(InfoKey)可以看具体的某个的属性。
+
+下面对具体的属性进行介绍：
+
+- access_module (default: mnesia)
+
+- auto_repair (default: true)
+Mnesia是否配置为当disc文件损坏的时候启动自动修复功能。
+
+- backup_module (default: mnesia_backup)
+Mnesia备份的回调模块。
+
+- event_module (default: mnesia_event)
+Mnesia事件处理的毁掉模块。
+
+- checkpoints (default: [])
+该节点的活跃的checkpoints名称列表。
+
+- directory 
+Mnesia目录的名字。Mnesia没有启动时也可以有该属性。
+
+- dump_log_time_threshold 
+转移log的时间限制。设置得短会频繁转移。
+
+- dump_log_update_in_place
+是否配置为直接在dets文件中更新，或者在dets文件的副本中执行更新。
+
+- dump_log_write_threshold
+写入多少次之后将log转移到disc中。
+
+- db_nodes (default: ['localnode'])
+组成永久数据库的所有节点, 如果在集群环境下，包含所有节点。无盘节点（Disc-less nodes）只有在显式加入schema之后才包含。
+
+- extra_db_nodes (default: [])
+启动的时候需要连接的额外的db_nodes.
+
+- running_db_nodes
+返回Mnesia当前运行的节点列表。
+
+- fallback_activated (default: false)
+是否启动自动回退。
+
+- held_locks
+返回由local Mnesia lock manager 持有的所有锁。
+
+- is_running
+指示mnesia的状态，yes，no，starting，stopping。
+
+- local_tables
+
+
+*** 创建一个mnesia的默认属性：
+- 表可读可写
+- 仅驻留内存
+- 存储的记录与表同名
+- 累死你个为set，即每个键最多只能对应一个表项
+- 加载优先级0，最低
+- local_content=false
+
+* functions
+- mnesia:wait_for_tables(TabList, Timeout) -> ok | {timeout, BadTabList} | {error, Reason}
+有的运用需要等待某个表能被访问，并能很好的工作。

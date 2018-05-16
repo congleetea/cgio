@@ -1,0 +1,33 @@
+#+TITLE:       erlang 的数据库 ets
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-11-14 Tue
+#+URI:         /blog/%y/%m/%d/erlang-ets
+#+KEYWORDS:    erlang,ets,node
+#+TAGS:        points,erlang
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: <TODO: insert your description here>
+
+* ets新建表
+** table identifier
+  ets:new之后又有一个标识符, 可以通过该标识符操作，如果使用named_table，那么table名字就可以作为标识符使用。这样会比较方便。
+
+** table类型
+set(default), ordered_set, bag, duplicate_bag.
+
+** table的权限
+public, protected(default), private
+
+** 主键
+{keypos,Pos}设置主键位置，默认第一个元素为主键。如果value时record的时候第一个元素都是record名字，所有需要使用该参数修改主键位置。
+
+** 性能调节
+- {write_concurrency,boolean()}
+  默认false, 往该表写入的时候，阻塞该表的其他操作，写入完成之后才允许。为true的时候，同一个表的不同object可以被多个进程同时写(也可以读)操作。这样增强ets的并发处理能力。常常在大并发的情况下要结合read_concurrency使用。
+
+- {read_concurrency,boolean()}
+  默认false，设置表是否可以被多个进程通知读取。
+
+** 存储 
+compressed: 保存的时候可以进行压缩，这样可以节省内存空间，但会减慢操作速度。

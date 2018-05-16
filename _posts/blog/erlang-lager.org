@@ -1,0 +1,79 @@
+#+TITLE:       erlang 的日志库 lager
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-02-27 Mon
+#+URI:         /blog/%y/%m/%d/erlang日志库-lager
+#+KEYWORDS:    lager,erlang,log
+#+TAGS:        point,erlang
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: Erlang的日志库lager
+
+** handler是怎么使用的
+#+BEGIN_SRC erlang
+start_handlers(_Sink, undefined) ->
+    ok;
+start_handlers(_Sink, Handlers) when not is_list(Handlers) ->
+    error_logger:error_msg(
+      "Invalid value for 'handlers' (must be list): ~p~n", [Handlers]),
+    throw({error, bad_config});
+start_handlers(Sink, Handlers) ->
+    %% handlers failing to start are handled in the handler_watcher
+    lager_config:global_set(handlers,
+                            lager_config:global_get(handlers, []) ++
+                            lists:map(fun({Module, Config}) ->
+                                              check_handler_config(Module, Config),
+                                              start_handler(Sink, Module, Config);
+                                          (_) ->
+                                              throw({error, bad_config})
+                                      end,
+                                      expand_handlers(Handlers))),
+    ok.
+#+END_SRC
+
+*** 首先在expand_handlers对各类handler进行一次处理，把某些handler设置id:
+#+BEGIN_SRC erlang
+expand_handlers([]) ->
+    [];
+expand_handlers([{lager_file_backend, [{Key, _Value}|_]=Config}|T]) when is_atom(Key) ->
+    %% this is definitely a new-style config, no expansion needed
+    [maybe_make_handler_id(lager_file_backend, Config) | expand_handlers(T)];
+expand_handlers([{lager_file_backend, Configs}|T]) ->
+    ?INT_LOG(notice, "Deprecated lager_file_backend config detected, please consider updating it", []),
+    [ {lager_file_backend:config_to_id(Config), Config} || Config <- Configs] ++
+      expand_handlers(T);
+expand_handlers([{Mod, Config}|T]) when is_atom(Mod) ->
+    [maybe_make_handler_id(Mod, Config) | expand_handlers(T)];
+expand_handlers([H|T]) ->
+    [H | expand_handlers(T)].
+#+END_SRC
+
+- lager_file_backend 带参数[{Key, Value}|..]
+- lager_file_backend 带其他Configs -废止了
+- {Mod, Config}
+
+*** 接下来检查handler的配置参数Config：
+#+BEGIN_SRC erlang
+check_handler_config({lager_file_backend, F}, Config) when is_list(Config); is_tuple(Config) ->
+    Fs = case get(?FILENAMES) of
+        undefined -> ordsets:new();
+        X -> X
+    end,
+    case ordsets:is_element(F, Fs) of
+        true ->
+            error_logger:error_msg(
+              "Cannot have same file (~p) in multiple file backends~n", [F]),
+            throw({error, bad_config});
+        false ->
+            put(?FILENAMES,
+                ordsets:add_element(F, Fs))
+    end,
+    ok;
+check_handler_config(_Handler, Config) when is_list(Config) orelse is_atom(Config) ->
+    ok;
+check_handler_config(Handler, _BadConfig) ->
+    throw({error, {bad_config, Handler}}).
+#+END_SRC
+这里要求Config是list或者atom才和规范。
+
+

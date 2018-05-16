@@ -1,0 +1,10 @@
+#+TITLE:       Linux进程的各种状态
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-04-29 Sat
+#+URI:         /blog/%y/%m/%d/linux进程的各种状态
+#+KEYWORDS:    system,process,linux
+#+TAGS:        points,system
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: 解释Linux的进程的各种状态

@@ -1,0 +1,86 @@
+#+TITLE:       Etcd
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-05-02 Tue
+#+URI:         /blog/%y/%m/%d/etcd
+#+KEYWORDS:    etcd,distributed
+#+TAGS:        broker,points
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: etcd
+
+* etcd: consistent key-value store for shared configuration and service discovery.
+
+也就是两个功能shared configuration和service discovery都是再k-v存储基础上的。存储类似redis，
+写入，读取和更新都是通过改变这些kv值来实现。
+
+另外watcher和ttl也是基于这些kv值的监控实现的。
+
+因此，注册和注销其实就是对应kv的put和get。
+
+* auth
+#+BEGIN_SRC text
+
+  $ etcdctl user list
+
+  ## 添加用户myuser
+  $ etcdctl user add myuser (input password) 
+  Password of myuser: 
+  Type password of myuser again for confirmation: 
+  User myuser created
+
+  $ etcdctl role add goim   ## 添加role，名为goim
+  Role goim created
+
+  $ etcdctl user grant-role myuser goim ## 给用户myuser添加role：goim 
+  Role goim is granted to user myuser
+
+  $ etcdctl user get myuser  ## 查看myuser用户的信息
+  User: myuser
+  Roles: goim
+
+  $ etcdctl role grant-permission goim --prefix=true readwrite im/  ## 赋予role相应的权限
+  Role goim updated
+
+  $ etcdctl user add root   ## 确保存在root用户，作为管理者。
+  Password of root: 
+  Type password of root again for confirmation: 
+  User root created
+  $ etcdctl auth enable     ## 激活auth功能
+  Authentication Enabled
+
+  $ etcdctl --user root:mypass auth disable  ## 取消认证功能
+  Authentication Disabled
+  $ etcdctl auth enable     ## 重新激活auth功能
+  Authentication Enabled
+
+  $ etcdctl --user root:mypass role list  ## 查看已有的所有role.
+  goim
+  root 
+
+  $ etcdctl --user root:mypass role get goim
+  Role goim
+  KV Read:
+    [im/, im0) (prefix im/)
+  KV Write:
+    [im/, im0) (prefix im/)
+
+  $ etcdctl --user root:mypass role revoke-permission goim --prefix=true im/  ## 取消goim的权限, 官方文档有remove命令，已经不用了。
+  Permission of range [im/, im0) is revoked from role goim 
+  $ etcdctl --user root:mypass role get goim  ## 再次查看，role的相应权限已经取消了。
+  Role goim
+  KV Read:
+  KV Write: 
+
+  ## 激活认证的情况下，新建其他role
+  $ etcdctl --user root:mypass role add intoyun-kfkworkers
+  Role intoyun-kfkworkers created
+
+  $ etcdctl --user root:mypass user grant-role myuser intoyun-kfkworkers
+  Role intoyun-kfkworkers is granted to user myuser
+  $ etcdctl --user root:mypass user get myuser
+  User: myuser
+  Roles: goim intoyun-kfkworkers
+  $ etcdctl --user root:mypass role grant-permission intoyun-kfkworkers --prefix=true readwrite intoyun-kfkworkers/
+  Role intoyun-kfkworkers updated
+#+END_SRC

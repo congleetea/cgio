@@ -1,0 +1,24 @@
+#+TITLE:       docker 实践
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-11-23 Thu
+#+URI:         /blog/%y/%m/%d/docker-实践
+#+KEYWORDS:    ops,docker,net
+#+TAGS:        points,docker,ops
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: docker实践记录
+
+
+* wen 
+- docker原理
+- docker和原生服务的性能损耗
+- docker使用原则
+
+* 性能
+
+Docker 中 NAT 和 HOST 的区别: http://rrestjs.lofter.com/post/80f11_935415d
+
+* 
+
+[[http://erlang.org/pipermail/erlang-questions/2016-March/088600.html][High memory consumption inside docker]]

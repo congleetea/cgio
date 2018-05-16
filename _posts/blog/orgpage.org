@@ -1,0 +1,39 @@
+#+TITLE:       org-page usage
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2016-11-14 一
+#+URI:         /blog/%y/%m/%d/org-page-usage
+#+KEYWORDS:    tools,emacs,org,blog
+#+TAGS:        tools, points
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: 使用 org-page 生成 github 的博客.
+
+
+* installation
+M-x package-install 搜索 org-page, simple-httpd 安装。 
+
+* configuration
+#+BEGIN_SRC lisp
+;; blog
+;; 确认当前repository在source branch下，if not, git checkout source
+;; open emacs, M-x op/new-post
+;; write your blog and save it
+;; git add new blog (under source branch) and commit it ( in emacs, you can use magit, it would be much easier to do the process)
+;; git push source， push source到center branch。这个不是必须的，因为博客本身只需要html文件，也就是master的文件。但是既然有了center server，何不把source备份呢
+;; M-x op/do-publication, 第一个问题选择y，第二个问题选择no，因为不用发布到其他文件夹，第三第四个问题选择y
+(require 'simple-httpd)
+(setq httpd-root "~/Documents/congleetea.github.io/blog")
+(httpd-start)
+
+(require 'org-page)
+(setq op/repository-directory "~/Documents/congleetea.github.io")
+(setq op/site-domain "http://congleetea.github.io")
+(setq op/personal-github-link "https://github.com/congleetea")
+(setq op/site-main-title "云亭")
+(setq op/site-sub-title "一个互联网小白的无知之路")
+(setq op/personal-disqus-shortname "congleetea")
+                                      ;(setq op/theme-root-directory "~/githubs/dotfiles/.emacs.d/themes/")
+(setq op/personal-avatar "https://avatars2.githubusercontent.com/u/9694398?v=3&s=460")
+                                      ;(setq op/personal-google-analytics-id "userid_of_google_analytics")
+#+END_SRC

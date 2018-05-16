@@ -1,0 +1,119 @@
+#+TITLE:       top指标
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-04-27 Thu
+#+URI:         /blog/%y/%m/%d/top指标
+#+KEYWORDS:    ops,top
+#+TAGS:        ops
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: top指标
+
+* top指标解释
+
+top指令结果大致如下, top指令怎么使用不解释了，-h就可以查看。主要说明这些指标和含义：
+
+#+BEGIN_SRC text
+top - 22:21:02 up 13:58,  4 users,  load average: 0.01, 0.03, 0.04
+Tasks: 269 total,   1 running, 268 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  0.8 us,  0.2 sy,  0.0 ni, 98.7 id,  0.3 wa,  0.0 hi,  0.0 si,  0.0 st
+KiB Mem:   8043508 total,  6743924 used,  1299584 free,   744244 buffers
+KiB Swap:  8592380 total,        0 used,  8592380 free.  2033216 cached Mem
+
+  PID USER      PR  NI    VIRT    RES    SHR S  %CPU %MEM     TIME+ COMMAND                                                                                                              
+ 1172 mongodb   20   0 3637368 187680 151556 S   0.3  2.3   3:05.69 mongod                                                                                                               
+    1 root      20   0   34020   4532   2708 S   0.0  0.1   0:00.84 init                                                                                                                 
+    5 root       0 -20       0      0      0 S   0.0  0.0   0:00.00 kworker/0:0H                                                                                                         
+#+END_SRC
+
+主要分几部分：
+
+- 系统运行时间和平均负载
+第一行前面依次是当前时间，系统运行时间，当前有几个用户（session）。接下来是CPU的平均负载，三个数值表示CPU 1/5/15分钟
+内的平均负载。平均负载（Unix定义CPU负载: 当前正在执行进程数 + 正在等候执行的进程数）反应CPU执行/等待队列的进程量。如
+果机器是单核处理器, 1代表processor有工作.如果是多核处理器,那么这个阈值将是核数.所以在4核处理器上,3.50依然不会让你的
+电脑宕机。
+
+*一般认为,值在阈值的70%的时候,就要考虑是否是个问题了.当为阈值100%的时候,需要立刻找到问题.大于100%的时候,问题已经严重了.*
+
+有时 *Load average高但是CPU usage低* ,说明很多进程都和CPU打交道,但是压力不在CPU, *大家都在队列里等着* ,可能是在等I/O,
+这个时候可以结合别的 *看看I/O是不是有问题* .
+
+- 各种任务数量
+
+| 类型     | 说明               |
+|----------+--------------------|
+| total    | 总的任务(进程)个数 |
+| running  | 正在运行的进程个数 |
+| sleeping | 正在睡眠的进程个数 |
+| stopped  | 停止的进程个数。   |
+| zombie   | 僵尸进程个数。     |
+
+- CPU状态
+| 名称                    | 说明                           |
+|-------------------------+--------------------------------|
+| us(user)                | un-niced的用户进程使用的时间。 |
+| sy(system)              | 运行内核进程的时间。           |
+| ni(niced)               | niced的用户进程使用的时间      |
+| id(idle)                | CPU的闲置时间。                |
+| wa(wait)                | CPU等待时间。                  |
+| hi(hardware interrupts) | 硬中断使用的时间。             |
+| si(software interrupts) | 软中断使用的时间。             |
+| st(steal time)          | [[http://blog.scoutapp.com/articles/2013/07/25/understanding-cpu-steal-time-when-should-you-be-worried][CPU Steal Time]]                 |
+
+1  如果us或者sy长时间占去了CPU时间,首先应该定位是哪个进程占用的,这个从下面的列表中可以得出。
+
+2  wa过高说明CPU等待的时间太久，可能很多时io操作，需要使用一些io检测工具查看。（比如iotop）。
+
+3  nice值为0的进程,nice值越高,被cpu执行的机会越少.nice值的范围是 -20 ~ 19。
+
+- 内存使用状况
+| KiB Mem:   8043508 total,  6743924 used,  1299584 free,   744244 buffers    |
+| KiB Swap:  8592380 total,        0 used,  8592380 free.  2033216 cached Mem |
+
+为了提高硬盘操作的速度,会用RAM缓存硬盘的数据(KB). Buffers 就是缓存的这部分信息的元信息。 Linux会帮你管理这部分。
+当物理内存不足时，操作系统会把内存中不常用的页换出到磁盘空间，当被换出的页需要被访问时，再换入到物理内存。所以
+交换区就是用来临时存放内存中不常用的内容的，感觉就想内存的一个小仓库
+
+buffers和cached Mem区别：buffer 缓存的是磁盘文件的 *元数据* ，例如文件属性、目录结构等等，cache 缓存的是真正的文件内容。
+
+Mem的used里面包含了cached mem的大小。
+
+- 进程列表
+
+| Name    | 	Description                                                                      |
+|---------+------------------------------------------------------------------------------------|
+| PID	   | 进程号                                                                             |
+| USER	  | 属于哪个用户                                                                       |
+| PR	    | 优先级(priority = nice_value + 20)                                                 |
+| NI      | 	进程的nice值                                                                     |
+| VIRT	  | 该进程占用的的虚拟内存大小, 包括所有swapped out的所有code，data，共享库。          |
+| RES	   | 使用常驻物理内存的大小(non-swapped)。                                              |
+| SHR	   | 占用的共享内存大小。                                                               |
+| S	     | 进程状态(D: uninterruptible sleep, Running, Sleeping, T: traced or stoped, Zombie) |
+| %CPU	  | CPU总的使用份额(多核时是各个核使用的总和) ([[https://unix.stackexchange.com/questions/145247/understanding-cpu-while-running-top-command][top的%CPU什么意思)]]                      |
+| %MEM	  | 进程当前使用的物理内存使用份额。                                                   |
+| TIME+	 | 该进程从启动到现在,占用CPU时间总长                                                 |
+| COMMAND | 	命令是什么                                                                       |
+
+NOTE: nice value 和 priority的区别
+
+nice value 是用户为进程指定的优先级, 但是priority是系统运行时给定的. 不同linux版本可能对priority的计算方法不一样,一般来说
+priority = nice_value + 20。
+
+
+* 几个重要的问题
+
+** buffer和cached Mem的区别
+
+** niced user process and un-niced user process; NI和PR
+
+** CPU的idle time
+
+
+
+
+
+
+
+[[http://walterinsh.github.io/2014/04/14/understand-top-linux-comand.html][Linux top命令指标简介]]

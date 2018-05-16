@@ -1,0 +1,141 @@
+#+TITLE:       CoAP协议（受限运用协议 Constrained Application Protocol）
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-12-07 Thu
+#+URI:         /blog/%y/%m/%d/coap协议
+#+KEYWORDS:    internet,coap,iot,m2m,受限环境,URL,UDP
+#+TAGS:        points,internet
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: coap协议的介绍
+
+这篇文章对CoAP进行了简要的介绍：http://www.maixj.net/ict/coap-16150
+
+协议中文版： https://github.com/WildDogTeam/contribute
+
+- 使用场景和产生原因：受限条件。
+
+- 协议：固定的头部，选项部分，数据部分。
+
+- 消息ID: CON中响应的ACK中包含同样的ID，NON中通过ID检测重复。
+
+- Token: CoAP使用一个Token来匹配请求对应的响应。
+
+- 请求消息分为CON和NON两种: 
+
+对于CON类型的请求，如果响应数据可以立即生成，那么对于请求消息的ACK就会同时携带响应数据。这就是附带响应。
+不需要对附带响应再进行单独的应答，因为假如携带响应数据的ACK丢失，那么客户端会重传请求消息。
+
+如果请求消息是一个CON类型的，而服务端无法立即响应，那么它就会立即发回一个空的ACK消息，以免客户端重传请求消息。
+当响应数据准备好了之后，服务器端就会把它组装成一个新的CON类型的消息（这需要客户端的ACK）。这种形式被称为“单独响应”，这时候就看出消息ID和token的不同用处了。
+
+- CODE: 
+
+当消息是一个请求时，Code字段表示请求方法。当响应时，Code字段代表响应代码。
+
+- 重传
+重传由超时时间和重传计数控制。
+
+对于一个新的CON消息，初始的超时时间被设置为介于ACK_TIMEOUT和ACK_TIMEOUT*ACK_RANDOM_FACTOR)之间（参见4.8节）的随机值（通常不是整数秒），重传计数被设置为0。
+当超时发生，且重传计数的值小于MAX_RETRANSMIT，消息被重传，重传计数增加，超时时间变为原来的两倍。如果在超时发生的时候重传计数达到了MAX_RETRANSMIT，或者收到了一个RST消息，那么就会放弃消息的传输，由应用程序来处理这个传输失败；如果在超时之前收到了ACK，那么传输就被认为成功了。
+
+- EXCHANGE_LIFETIME(针对CON消息)
+在EXCHANGE_LIFETIME时间之内，相同的Message ID必须不能重复使用(即与同一个端通信)。
+
+在EXCHANGE_LIFETIME时间之内，当ACK消息丢失或者在第一个超时时间之前没能到达原始服务端，接收端可能收到多次重复的CON消息(由Message ID和源端地址标识)。接收端应该对每一次收到的重复消息都回以相同的ACK或RST，但应该只处理一次。
+
+当EXCHANGE_LIFETIME超时后，如果该CON请求还没有收到响应，客户端就会停止等待.
+
+- NON_LIFETIME(针对NON消息)
+
+- 拥堵控制 
+NSTART设置维持未完成交互的数量。
+
+CoAP协议中，拥塞控制主要由客户端实现。然而，客户端可能会出现故障(或者客户端实际上就是攻击者)，例如，在第11.3节中提到的放大攻击。为了将损失（网络带宽及能耗）降到最低，对合理的应用请求，服务器应该对响应限速。对于行为异常的端来说限速是有且最有效的办法了。
+
+- 传输参数
+
+  | name              | default value |
+  |-------------------+---------------|
+  | ACK_TIMEOUT       | 2 seconds     |
+  | ACK_RANDOM_FACTOR | 1.5           |
+  | MAX_RETRANSMIT    | 4             |
+  | NSTART            | 1             |
+  | DEFAULT_LEISURE   | 5 seconds     |
+  | PROBING_RATE      | 1 byte/second |
+  |                   |               |
+
+ACK_TIMEOUT（应答超时时间）、ACK_RANDOM_FACTOR（应答随机因子） 和MAX_RETRANSMIT（最大重传时间）这三个参数共同影响着重传时间，重传时间反过来也影响着这些参数需要保持的时间长度。
+
+最大传输跨度（MAX_TRANSMIT_SPAN）: ACK_TIMEOUT * ((2 ** MAX_RETRANSMIT) - 1) * ACK_RANDOM_FACTOR
+
+最大传输等待时间（MAX_TRANSMIT_WAIT）：ACK_TIMEOUT * ((2 ** (MAX_RETRANSMIT + 1)) - 1) *ACK_RANDOM_FACTOR
+最大时延（MAX_LATENCY）：指的是数据包从开始发送到完全接收之间的最大时间 。
+
+MAX_RTT：往返时间的最大值: （2 * MAX_LATENCY) + PROCESSING_DELAY
+
+不需确认消息周期(NON_LIFETIME)：它指的是从发送NON消息到该Message ID可以被复用之间的时间。
+
+- 重要选项/非重要选项Critical/Elective 
+选项分两个种类：重要“critical”或者非重要“elective”。这两者的不同之处是端如何处理一个不能识别的option。
+
+重要/非重要规则不适用于代理.
+
+* Options
+** Content-Format
+   Content-Format选项即消息的payload段。
+** ETag
+   实体标识作为本地资源标识符，用来区分该资源是否已经随着时间推移而变化了。
+** Location-Path
+  每个Location-Path选项对应该资源绝对路径的一个段。
+** Location-Query
+   每个Location-Query选项对应该资源的一个参数。
+** Max-Age
+   Max-Age选项定义了一个响应在它被标记为未刷新前，最多能缓存的时间。
+** Proxy-Uri
+** Proxy-Scheme
+** Uri-Host
+   选项定义了被请求资源的网络主机；
+** Uri-Path
+   每个Uri-Path选项定义了一段资源的绝对路径；
+** Uri-Port
+   选项定义了资源在传输层的端口号；
+** Uri-Query
+   每个Uri-Query选项定义了一个资源的参数。
+** Accept
+   Accept选项用于表明哪些Content-Format能够被客户端接受。
+   如果没有Accept选项，表明客户端可以接收所有格式。
+** If-Match
+   If-Match选项的值是一个ETag或者是一个空白字符串(匹配所有)。
+** If-None-Match
+   If-None-Match选项可能被用于当目标资源不存在时，生成一个条件请求。
+** Size1
+   Size1选项提供在一个请求中资源表现的长度信息。选项的值是一个整型，表示字节数。它主要用于块传输。
+   在目前标准中，它用于响应码码4.13，定义服务端能够处理的请求实体的最大长度。
+
+- Uri-Host，Uri-Port，Uri-Path，Uri-Query Uri-Host，Uri-Port，Uri-Path，Uri-Query选项都用来定位一个向原始服务端请求的目标资源。
+- Proxy-Uri和Proxy-Scheme Proxy-Uri选项被用于生成一个向正向代理（5.7节）发送的请求。用来请求正向代理将该请求转发给服务端或者从合法的缓存中返回一个响应。
+- Content-Format选项即消息的payload段
+- Location-Path和Location-Query Location-Path和Location-Query选项定义由一个绝对路径、一个请求字符串，或者二者一起组成的相对URI。
+- 条件请求选项允许客户端通知服务端，当这些在选项中包含的条件被满足时才执行请求。
+
+* observe 订阅选项
+
+* method
+** get
+   GET方法根据请求URI定位资源，从相符合的信息中获取对应的表现。
+** post(带参数的publish)
+    POST方法要求处理包含在请求中的表现。POST方法执行的实际功能由原始服务端决定，并依赖于目标资源。它通常的结果是 *创建新资源或者更新目标资源* 。
+** put(相当于publish)
+   PUT方法要求更新或创建由请求URI定位的资源。
+** delete
+   DELETE方法要求删除由请求URI定位的资源。
+
+
+
+
+* block
+RFC7959
+
+使用两对选项，分别作为request和response的block选项：
+(block1, size1)作为请求的资源表示，(block2, size2)作为response的表示。

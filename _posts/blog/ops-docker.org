@@ -1,0 +1,273 @@
+#+TITLE:       Docker
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@lee
+#+DATE:        2016-11-15 二
+#+URI:         /blog/%y/%m/%d/docker
+#+KEYWORDS:    ops 
+#+TAGS:        ops, points 
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: Docker
+
+* install
+** docker 安装
+https://docs.docker.com/engine/installation/linux/ubuntulinux/
+
+安装完成之后需要重新启动计算机。
+
+** 加速器使用
+https://yq.aliyun.com/articles/29941
+
+** docker-compose 安装
+https://docs.docker.com/compose/install/
+
+** docker-machine 安装
+https://docs.docker.com/machine/install-machine/
+
+** 命令补全工具
+| [Command-line completion](https://docs.docker.com/compose/completion/) |
+| http://answ.me/post/docker-completion-in-zsh/                          |
+
+* 基础和原理
+** 底层原理
+*** Linux cgroup
+http://coolshell.cn/articles/17049.html
+
+*** Linux namespace
+http://coolshell.cn/articles/17010.html
+
+是一种内核级别的环境隔离方法。
+
+*** AUFS(Union File System)
+http://coolshell.cn/articles/17061.html
+
+
+** docker概念和原理
+*** 镜像和docker的文件系统分层存储结构
+[文件系统, 存储层]
+
+http://www.cnblogs.com/ToBeSmart/p/4311249.html
+
+镜像： 镜像是一个特殊的文件系统，除了提供容器运行时所需的程序、库、资
+源、配置等文件外，还包含了一些为运行时准备的一些配置参数（ 如匿名卷、环境
+变量、用户等） 。镜像不包含任何动态数据，其内容在构建之后也不会被改变。
+
+*** 容器是活了的镜像, 本质就是进程运行的隔离环境
+
+镜像使用的是分层存储，容器也是如此。每一个容器运行时，是以镜像为
+基础层，在其上创建一个当前容器的存储层，我们可以称这个为容器运行时读写而
+准备的存储层为 *容器存储层* 。
+
+容器存储层的生存周期和容器一样，容器消亡时，容器存储层也随之消亡。因此，
+任何保存于容器存储层的信息都会随容器删除而丢失。按照docker的最佳实践，容器不该向其存储层
+写入任何数据，容器的存储层要保持无状态化。如果需要保存容器产生的数据，
+那就需要使用数据卷Volume, 或者绑定宿主目录，当读写这些位置的时候会跳过容器存储层，
+直接对宿主（或网络存储）发生读写，其性能和稳定性更高, 并且使用数据卷后，容器可以随意删除、
+重新 run ，数据却不会丢失。
+
+*** Docker Registry是集中存储和分发镜像的服务
+共有和私有之分。
+
+最常用的就是Docker Hub。本地也是一个Docker Registry。这和git类似。
+
+** docker容器启动过程
+- 检查本地是否存在指定的镜像，不存在就从公有仓库下载
+- 利用镜像创建并启动一个容器
+- 分配一个文件系统，并在只读的镜像层外面挂载一层可读写层
+- 从宿主主机配置的网桥接口中桥接一个虚拟接口到容器中去
+- 从地址池配置一个 ip 地址给容器
+- 执行用户指定的应用程序
+- 执行完毕后容器被终止
+
+** Docker数据管理-数据卷和数据卷容器
+*** 数据卷
+数据卷是被设计用来持久化数据的，它的生命周期独立于容器
+
+所有的数据卷都是创建在主机的 /var/lib/docker/volumes/ 下面的.
+
+挂载一个本地主机的目录到容器中: 本地目录的路径必须是绝对路径，如果目录不存在 Docker
+会自动为你创建它。Docker 挂载数据卷的默认权限是读写.
+
+*** 数据卷容器
+如果你有一些持续更新的数据需要在容器之间共享，最好创建数据卷容器。
+数据卷容器，其实就是一个正常的容器，专门用来提供数据卷供其它容器挂载的。
+
+其他容器使用docker run --volumes-from CONTAINER
+
+**** 备份
+**** 恢复
+**** 迁移
+
+** docker的网络
+外部访问容器和容器互联
+
+*** 外部访问容器使用端口映射。
+*** 容器互联linking
+
+** 高级网络配置
+
+#+CAPTION: docker网络 
+#+LABEL: fig:SED-HR4049
+[[./images/docker-network.png]]
+
+
+* docker使用代理
+** 在Dockerfile中配置
+配置代理的参数，使用宿主机的代理。
+#+BEGIN_SRC yaml
+ENV PROXY=http://192.168.1.100:8123
+
+RUN export http_proxy=$PROXY \
+    && export HTTPS_PROXY=$http_proxy \
+    && export HTTP_PROXY=$http_proxy \
+    && export FTP_PROXY=$http_proxy \
+    && export https_proxy=$http_proxy \
+    && export ftp_proxy=$http_proxy
+#+END_SRC
+
+** 配置docker服务器
+https://docs.docker.com/engine/admin/systemd/#http-proxy
+
+
+
+
+* Dockerfile制作镜像
+** FROM <images>
+| 必须要有的指令                             |
+| 第一条指令                                 |
+| FROM scratch (Linux下静态编译的常用该指令) |
+
+** RUN
+| 两种方式RUN <命令>， 或者RUN ["可执行文件", "参数1", "参数2"] |
+| 每个RUN都是一层，所以要尽量合并RUN命令。                      |
+| 注意完成之后的清理工作，减小镜像大小                          |
+
+#+BEGIN_SRC shell
+RUN buildDeps='gcc libc6-dev make' \
+    && apt-get update \
+    && apt-get install -y $buildDeps \
+    && wget -O redis.tar.gz "http://download.redis.io/releases/redis-3.2.5.tar.gz" \
+    && mkdir -p /usr/src/redis \
+    && tar -xzf redis.tar.gz -C /usr/src/redis --strip-components=1 \
+    && make -C /usr/src/redis \
+    && make -C /usr/src/redis install \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm redis.tar.gz \
+    && rm -r /usr/src/redis \
+    && apt-get purge -y --auto-remove $buildDeps
+#+END_SRC
+
+** COPY
+| 两种方式RUN <命令>， 或者COPY [<src1>, <src2>, ..., <dest>]                                                                                                     |
+| 可以使用通配符                                                                                                                                                  |
+| 使用 COPY 指令，源文件的各种元数据都会保留。比如 读、写、执行权限、文件变更时间等。这个特性对于镜像定制很有用。特别是构建 相关文件都在使用 Git 进行管理的时候。 |
+
+** ADD (不推荐使用)
+| 可以从url下载文件， 下载后的文件权限自动设置为 600                                                                           |
+| 源文件是tar包会自动解压, 这个功能很好用。                                                                                    |
+| 官方建议尽量使用COPY，因为其语义明确。                                                                                       |
+| 因此在 COPY 和 ADD 指令中选择的时候，可以遵循这样的原则，所有的文件复制均使用 COPY 指令，仅在需要自动解压缩的场合使用 ADD 。 |
+
+** CMD容器启动命令
+| 两种方式shell格式，exec格式, 推荐使用exec格式。 |
+| 如果使用ENTRYPOINT指令，CMD参数将作为其参数。   |
+| docker run时可以被最后的命令替换                |
+
+容器内没有后台执行，只有前台执行。指令执行结束，执行CMD的主进程退出，容器也就退出了, 所以很多时候不能使用start启动。
+
+** ENTRYPOINT入口点
+| shell，exec两种格式                                                                      |
+| 如果使用ENTRYPOINT指令，CMD参数将作为其参数。实际执行的是<ENTRYPOINT> "<CMD>"            |
+| docker run时可以被 --entrypoint 替换                                                     |
+| 由于CMD会作为ENTRYPOINT的参数，所以docker run最后的命令会作为新的CMD在ENTRYPOINT后面执行 |
+
+** ENV 设置环境变量
+| 两种格式               |
+| build和run的时候都有效 |
+
+** ARG
+| 只有build的时候有效，相比ENV， 容器运行时不会存在这些环境变量 |
+| 可以使用docker build --build-arg <k>=<v>覆盖                  |
+
+** VOLUME
+| 容易的数据操作保存目录         |
+| 可以docker run -v xxx:/bbb覆盖 |
+
+** EXPOSE声明端口
+
+** WORKDIR指定工作目录
+Dockerfile中的相对目录都是基于工作目录的。
+
+** USER 切换到该用户，事前要建立好
+
+** HEALTHCHECK 指定容器健康检查方式
+| 告诉 Docker 应该如何进行判断容器的状态是否正常 |
+| 只能出现一次，出现多次以最后一次为准。         |
+| 检查结果会保存，可以使用docker inspect查看。   |
+
+** ONBUILD
+ONBUILD 是一个特殊的指令，它后面跟的是其它指令，比如 RUN , COPY 等，
+而这些指令，在当前镜像构建时并不会被执行。只有当以当前镜像为基础镜像，去
+构建下一级镜像的时候才会被执行。
+
+
+** *go镜像**
+https://www.iron.io/an-easier-way-to-create-tiny-golang-docker-images/
+https://developer.atlassian.com/blog/2015/07/osx-static-golang-binaries-with-docker/
+https://joeshaw.org/smaller-docker-containers-for-go-apps/
+http://colobu.com/2015/10/12/create-minimal-golang-docker-images/
+
+如果我们在ubuntu中编译了go的代码，直接把可执行文件copy之后制作镜像， 在执行的时候可能会提示找不到这个文件。
+
+解决办法是我们先制作一个基于alphine的go编译镜像；然后将本地的go/src映射到Volume中，启动这个编译的容器，在里面
+编译你本地的代码，编译的可执行文件会在本地产生，这时候你拷贝这个可执行文件执行新的镜像就没有问题了。
+
+* 常用指令
+
+** image操作
+*** docker build 构建镜像
+docker build [选项] <上下文路径/URL/->
+
+context上下文中的内容被打包给docker引擎，执行build。目录下面不希望打包复制给docker引擎的可以使用.dockerignore文件。
+因此，上下文路径并不一定是Dockerfile所在位置，而是打包到docker引擎的目录， 所以在build的时候第一行的log是 *Sending 
+build context to Docker daemon xxx MB* 。如果Dockerfile不在当前位置，可以使用-f指定Dockerfile的位置。
+
+不止可以使用本地目录文件build，也可以使用git等的URL来build。
+
+*** docker run 
+| -it    | -i: 交互式操作，-t终端，即进入 bash 执行一些命令并查看返回结果，因此我们需要交互式终端 |
+| --rm   | 容器退出后随之将其删除                                                                 |
+| -d     | 后台运行                                                                               |
+| -P     | 随机映射端口                                                                           |
+| -p     | 指定映射端口                                                                           |
+| --link | --link container_name:alias                                                            |
+
+*** docker images
+
+| 过滤-f | dangling=true 列出虚悬镜像 |
+| -a     | 所有镜像，包括中间层       |
+| -q     | 清净模式，只显示镜像ID     |
+
+*** docker rmi 
+** 容器操作
+** docker diff CONTAINER 
+** docker commit (慎用)
+就是在原有镜像的基础上，再叠加上容器的存储层，并构成新的镜像。以后我们运行这个新镜像的时候，就会拥有
+原有容器最后的文件变化。
+
+这种方式制作镜像使我们制作的过程和目的不清楚，所以慎用该方式，还是用Dockerfile来制作镜像。
+
+** docker start CONTAINER 
+将已经终止的容器启动运行。
+
+** docker ps
+
+** docker attach
+
+** docker logs 
+** docker rm 
+
+* 问题
+- WARNING: IPv4 forwarding is disabled. Networking will not work
+$ sudo sysctl -a | grep net.ipv4.ip_forward
+检查系统内核参数net.ipv4.ip_forward 确保其为1.

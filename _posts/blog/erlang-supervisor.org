@@ -1,0 +1,92 @@
+#+TITLE:       erlang 监督者 supervisor
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-11-15 Wed
+#+URI:         /blog/%y/%m/%d/erlang-supervisor
+#+KEYWORDS:    erlang,supervisor
+#+TAGS:        erlang,points
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: erlang-supervisor
+
+* init返回
+{ok, sup_flags(), child_spec()}
+
+sup_flags()是针对这个supervisor的属性，child_spec()是子进程规范列表。
+
+* 监督者标识 
+  #+BEGIN_SRC erlang
+       sup_flags() = #{strategy => strategy(),         % optional
+                       intensity => non_neg_integer(), % optional
+                       period => pos_integer()}        % optional
+  #+END_SRC
+
+** 四种重启策略strategy
+
+- one_for_one(default)
+  这类子进程其中一个挂了，只有这个进程会被重启，其他不受影响。
+
+- one_for_all 
+  这类子进程任何一个挂了，所有进程全部重启。
+
+- rest_for_one
+  这类进程某个子进程挂了，那么在这个挂了的子进程后面启动的所有子进程都会按顺序重启。
+
+- simple_one_for_one 
+  这是one_for_one的简化版，但是所有子进程都是基于相同的spec动态启动，这些子进程都是同一spec的实例。
+
+** 重启密度
+
+重启密度设置是为了避免无休止的进程重启。重启密度由 intensity(次数) 和 period(s) 确定，超过这个重启密度，supervisor就会终止所有的
+子进程，然后终止自己。
+
+
+* 子进程规范
+#+BEGIN_SRC erlang
+      child_spec() = #{id => child_id(),       % mandatory
+                       start => mfargs(),      % mandatory
+                       restart => restart(),   % optional
+                       shutdown => shutdown(), % optional
+                       type => worker(),       % optional
+                       modules => modules()}   % optional
+#+END_SRC
+
+** 子进程启动方式start()
+   {Module, Function, Args}，子进程通过这个函数启动。simple_one_for_one 的时候，Args还要加上 start_child/2 中的参数。
+
+** restart() 
+   定义被终止的进程什么时候会被重启。
+
+- permanent 永久的 
+  这种类型的子进程只要终止都会被重启。
+
+- temporary 临时的
+  这种类型的子进程无论如何都不会被重启，就算strategy是one_for_one,rest_for_one.
+  
+- transient 瞬时的
+  这种类型的子进程只有在非正常终止之后才会被重启。即不是normal, shutdown, or {shutdown,Term}这类终止原因。
+ 
+** shutdown()
+   定义进程应该被怎么杀死。
+   
+   - brutal_kill
+     无条件使用exit(Child,kill)粗暴地杀死。
+
+   - 整数(ms)
+     如果是整数，就是超过这个时间就使用exit(Child,shutdown)杀死。
+
+   - infinity 
+     一直等待，当子进程时supervisor的时候，要等待子进程的子进程终止之后才终止supervisor。当然子进程是worker的时候也可以使用这种方式。
+
+** type()
+   指明这个子进程是worker还是supervisor。
+
+** module() 
+   指出进程使用那个模块。
+
+* 关于 start_child/2
+
+- supervisor 的 init 指定的方式如果是 one_for_one 的时候，在启动了supervisor后会自动将制定了spec的worker或sub-supervisor启动起来。
+- 有时候需要手动调用start_child来在该sup下面启动worker，这时候如果不适用init的spec，那就是用start_child(Sup, NewSpec)。NewSpec就是
+  该worker的spec。如果init中制定simple_one_for_one的方式，需要临时增加worker，这时候可以使用start_child(Sup, OptsList)，OptList是参数，
+  这个参数会append在spec中的MFA指定的A后面，即真正执行的时候时MF(A+OptsList)。

@@ -1,0 +1,436 @@
+#+TITLE:       运维与tsung
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-01-05 Thu
+#+URI:         /blog/%y/%m/%d/运维与tsung
+#+KEYWORDS:    ops,tsung
+#+TAGS:        ops
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: tsung笔记
+
+* 概念 
+** 虚拟ip
+每个虚拟ip可以使用65535个端口，这样就可以突破每台主机65535的连接数限制。
+
+** tsung的client，server，session
+client是一个node，server是需要测试的服务器，session是一个测试场景(里面包含了这个场景的过程) 。
+如果使用主从模式，也就是集群，那么master会将sessions分配给各个slaves；如果session包含多个request，
+那么slave会按顺序执行这些requests。
+
+* tsung使用
+#+BEGIN_SRC shell
+.
+├── index.html
+├── inets_error.log
+├── match.log
+├── mqtt.xml
+├── style
+│   ├── bootstrap.min.css
+│   ├── bootstrap.min.js
+│   ├── dashboard.css
+│   ├── docs.min.css
+│   ├── dygraph-combined.js
+│   └── jquery.min.js
+├── tsung0@testjumper.log
+├── tsung1@testcluster3.log
+├── tsung_controller@test1.log
+└── tsung.log
+#+END_SRC
+
+上图的结构使我们使用两个client得到的log结果。集群中的每个node产生的log都会在这里。其中一个controller，两个client分别是tsung0，tsung1.
+所以无需在所有节点上进行查看, 只需要在controller上就可以查看所有的node的log了。而slave上并没有保存log, 只有一个*.dump文件。
+
+* log文件
+配置：
+
+在顶级的tsung便签设置：
+#+BEGIN_SRC xml
+ <tsung loglevel="info" dumptraffic="xxx">
+ ...
+ </tsung>
+#+END_SRC
+dumptraffic="true"， 这会把所有的通信数据都写入log，使用该设置会大大拖慢tsung的速度。"light"只写入前44个字节;从1.4版本，使用"protocol"
+打印指定协议的log;当进行很大的压力测试的时候，protocol的logging会压垮controller，这时可以使用protocol_local，该选项将log写在每个slave
+机器上，结束之后你需要手动merge所有的log。
+
+
+loglevel对性能很重要，高负载的时候建议使用warning。可选项：emergency，critical，error，warning，notive(default)，info，debug。
+如果要获得详细的log，使用make debug重新编译tsung，并设置loglevel为debug。
+
+* 文件结构
+测试的配置文件其实就是构造一个真实的场景， 主要需要一下几个步骤:
+
+1  定义测试使用的的测试机集群（clients）和server。
+
+2  tsung可以使用一些后台服务与远端代理交互实现对远端服务器的监控, 远端代理支持erlang(default)，SNMP, Munin类型。
+
+3  定义加载过程，主要是定义生成用户的规则，以及执行request任务的分配。
+
+4  定义session，这里的session就是一个个按顺序组合的request的集合，这些任务将按照第三部的加载过程的分配规则被执行。
+
+此间还有很多设置项对各部分使用option进行设置, 这些在后面遇到的时候讲解。为了模拟更复杂的场景，还有一些高级功能可以使用。
+比如： 动态替换，读取外部文件，动态变量, 检查服务器响应，执行逻辑(loops，if，foreach), 流控，请求排除，用户认证。
+
+
+** clients 和 servers
+*** clients
+对于client，需要指定我们使用的clients slaves机器的主机，产生的最大用户限制，产生用户的比例分配等等；此外如果使用虚拟ip，
+需要在这里设置，虚拟ip的使用将大大增加可以产生的用户数，打破每个机器65535的限制。
+
+clients机器分为master(也叫controller)和slaves，这些机器上 *都要安装erlang和tsung，并且安装路径要相同* 。这样在controller上
+启动tsung之后，clients标签里面设置的机器都会启动tsung的虚拟机，相应的任务将由这些slaves来执行，master只负责分配和管理监控
+slaves上的用户， *session包含的多个request会被按顺序执行* 。如果你需要master也充当压力测试任务机，可以在client标签中使用
+use_controller_vm="true"。但是这种方式通常只在单机的时候使用，集群中没必要使用这种方式。
+
+需要说明的是，clients的 *maxusers* 并不是这台机器只能产生这么多用户，而是 *当用户超过这个数的时候会自动新建一个新的虚拟机来处理
+新的用户* 。
+
+tsung查找clients，可以直接根据clients中显式指定的方式找到，也可以从一个batch/job scheduler调度器中查找clients node列表。目前支持
+PBS/torque，LSF和OAR(这些都是一些作业调度器)。
+
+*** servers
+定义测试的服务器(clients据此连接服务器)，如果有多个服务器，可以指定各自承受的负载比例。
+
+** monitoring
+- erlang
+需要所有受监控的机器上安装相同版本的erlang/otp，如果不安装，可以使用下面的方式。
+
+- SNMP(简单网络管理协议Simple Network Management Protocol)
+http://www.dpstele.com/snmp/tutorial-what-is.php
+
+- Munin 
+
+** load
+load主要负责产生虚拟用户并指定分配session的方法。按不同的需要可以有 *随机产生的用户* 和 *静态生成的用户* 两种。
+
+随机生成用户通过arrivalphase来分阶段生成，第一个阶段duration结束之后开始下一个阶段的用户生成。 在执行sesion的时候，
+如果在arrivalphase里面没有指定session，那系统会随机分配后面的session，这时候session被执行的比例由session中的 
+probability 规定; 如果arrivalphase里面指定了session被该阶段用户执行的probability(和要为100)，那么session中的
+probability就会被覆盖。
+
+如果需要给 *特定的用户* 指定在 *特定的时间* 执行 *特定的session*, 我们可以使用静态产生的用户。
+
+#+BEGIN_SRC xml
+ <load>
+    <arrivalphase phase="1" duration="10" unit="minute">
+       <users maxnumber="10" interarrival="2" unit="second"></users>
+    </arrivalphase>
+    <arrivalphase phase="2" duration="1" unit="minute">
+       <session_setup name="http_test_1" probability="80"/>
+       <session_setup name="fake" probability="20"/>
+       <users interarrival="1" unit="second"/>
+    </arrivalphase>
+    <user session="http-example" start_time="185" unit="second"></user>
+    <user session="http-example" start_time="10" unit="minute"></user>
+    <user session="foo" start_time="11" unit="minute"></user>
+ </load>
+#+END_SRC
+这其中包括两个阶段的随机用户, 前10min以每秒2个的速度生成用户(maxnumber限定最多生成10个)，系统随机按照后面session中定义
+的probability执行; 接下来的1min按每秒1个的速度生成用户，按概率分配session(http_test_1:fake为8:2)。后面的三个user标签
+定义的是三个静态用户群分别在测试启动185s开始生成用户执行http-example，接下来测试启动10min之后生成用户执行http-example,
+测试启动11min只有生成用户执行foo。
+
+*需要说明的是arrivalphase中的duration并不是这部分用户群到了规定的这个时间就必须停止* ，如果session没有完成会忽略这个时间继续执行；
+当然如果用户提前完成了session，用户也会提前释放。(也因为这样，真正的并行用户数是不能完全在任何时候得到保证的)。如果 *要到某个时间
+强制断开测试，可以在load标签中添加duration* (最大50天，单位second，minute或hour)。
+
+** sessions
+这部分就是定义request的执行，此处不进行详述，使用的时候自己查找资料即可。下面着重解释用到的一些设置，这些设置对测试很关键。
+
+** option
+这些选项主要包括一下一些部分的设置。
+
+*** Thinktimes,SSL,Buffers
+默认值可以全局设置，thinktime表示场景中requests之间的时间，类似sleep的功能。ssl_ciphers指定ssl cipher算法。
+*_buffer指定tcp或者udp读写buffer的大小。
+#+BEGIN_SRC xml 
+ <option name="thinktime" value="3" random="false" override="true"/>
+ <option name="ssl_ciphers" value="EXP1024-RC4-SHA,EDH-RSA-DES-CBC3-SHA"/>
+ <option name="tcp_snd_buffer" value="16384"></option>
+ <option name="tcp_rcv_buffer" value="16384"></option>
+ <option name="udp_snd_buffer" value="16384"></option>
+ <option name="udp_rcv_buffer" value="16384"></option>
+#+END_SRC
+
+默认使能SSL session cache，如果要禁掉：
+#+BEGIN_SRC xml 
+ <option name="ssl_reuse_sessions" value="false"/>
+#+END_SRC
+
+关于 *ssl session cache* ， 参考[[https://www.ibm.com/support/knowledgecenter/SS9H2Y_7.0.0/com.ibm.dp.xb.doc/sslproxyprofile_sessioncaching.html][SSL session]] 。
+
+*** Timeout for TCP connections (New in version 1.6.0)
+给建立连接设置一个ms的延时，默认infinity。可以全局设置，也可以在session内部设置：
+#+BEGIN_SRC xml
+  <!-- 全局设置： -->
+  <option name="connect_timeout" value="5000" />
+  <!-- session内部设置-->
+  <set_option name="connect_timeout" value="1000" />
+#+END_SRC
+此外，还有一个重要参数需要设置：
+#+BEGIN_SRC xml
+  <option name=”tcp_reuseaddr” value=”true” />
+#+END_SRC
+
+
+*** Retry Attempts and Timeouts (New in version 1.6.0)
+指定重连次数和重连的timeout（ms, 默认10, 用以使用一个简单的backoff算法.）：
+#+BEGIN_SRC xml
+  <option name="max_retries" value="5" />
+  <option name="retry_timeout" value="5000" />
+#+END_SRC
+
+*** Timeout for acknowledgments of messages
+*** Hibernate
+用来减小模拟用户在thinktime时的内存消耗。默认thinktimes超过10s就进行垃圾回收。
+
+*** Rate_limit
+使用token bucket算法限制每个用户的带宽。单位KBytes/second，通过max指定峰值，默认max和value相同。
+
+如果不使用全局值，可以在session内部使用set_option设置。
+
+*** Ports_range
+这是一个重要参数，指定clients机器每个IP(考虑虚拟IP)可用的端口范围。
+
+*** Setting the seed for random numbers
+指定随机数种子， 默认是当前的时间。
+
+下面这些是针对各种协议的，在这里就不详述了。
+*** Path for BOSH
+BOSH(Bidirectional-streams Over Synchronous HTTP)，协议的设计目标之一是提供准TCP的连接性能同时兼容受约束的运行环境。
+*** Websocket options
+*** XMPP/Jabber options
+*** HTTP options
+*** AMQP options
+
+** Advanced Features
+*** 动态替换
+场景中的某些元素需要被替换，比如认证时的用户名和密码，URL等等。
+
+- 动态替换需要request中添加属性subst="true"。
+- 使用一个函数结果作为替换
+替换时使用%%Module:Function%%的方式进行替换。则会把运行函数Module:Function({Pid,DynData})
+的结果用来做替换。其中Pid是erlang中当前虚拟用户的进程Pid，DynData是动态变量的列表。
+
+首先要把替换的函数模块写好，用erlc编译为.beam文件之后，放在所有clients机器的$PREFIX/lib/erlang/lib/tsung-X.X.X/ebin/
+目录下面。当然tsung也提供了一些built-in function。
+
+*** 读取外部文件
+tsung读取外部文件的方式实际上是使用了一个叫ts_file_server的模块，使用该模块中的函数可以读取外部文件，比如ts_file_server:get_next_line
+(读到最后一行之后返回第一行)和ts_file_server:get_random_line。实际上，我们使用csv文件不需要自己写模块函数来解析，直接使用setdynvars
+就可以读取之后返回变量。
+
+具体步骤：
+- 生成一个csv文件，比如myuser1.csv文件，内容如下：
+#+BEGIN_SRC text
+100000;3xxxxxxxx0;
+100001;3xxxxxxxx1;
+#+END_SRC
+每组变量占一行，变量之后用分好结束，变量之间的分号后面不能留空格。
+
+- 读取文件，设置option，读取多个文件用id标识：
+#+BEGIN_SRC xml
+ <options>
+    <option name="file_server" id="users1" value="./myuser1.csv" />
+    <option name="file_server" id="users2" value="./myuser2.csv" />
+ </options>
+#+END_SRC
+
+- 设置变量
+#+BEGIN_SRC xml
+      <setdynvars sourcetype="file" fileid="users1" delimiter=";" order="iter">
+        <var name="username" />
+        <var name="password" />
+      </setdynvars>
+#+END_SRC
+这样就会从文件读取内容生成username和password两个变量。
+
+如果使用了order="iter", 两个阶段产生的用户使用的参数是连续的，也就是后一个阶段的用户使用的参数接着前一个阶段的最后一个参数。
+ 
+- request中使用, 引用方法%%_username%%，%%_password%%。
+#+BEGIN_SRC xml
+  <request subst="true">
+    <mqtt type="connect"
+          username="%%_dtoken%%"
+          password="%%_deviceid%%"
+          clean_start="true"
+          keepalive="60"
+          will_topic="%%_deviceid%%/info"
+          will_qos="0"
+          will_msg="{'productId': 'xxx', 'board': '888001', 'productVer': '1', 'libVer': '1.0.0.161212', 'subsysVer': '1.0.2.1', 'online': false}"
+          will_retain="false"/>
+  </request>
+#+END_SRC
+
+这里用到了动态变量，下面就解释动态变量的使用。
+
+*** 动态变量
+有时候在session中需要服务器给每个用户动态生成一个值。比如上面从文件中读取, 或者从你自己写的一个erlang代码中获取。
+
+所有需要用到替换的都要在request中加入subst="true"。
+
+- 从文见csv，html中获取变量
+
+- 正则regexp
+如果动态值不是表单变量，可以手动使用regexp获取，这是使用了re模块(一个类Perl的erlang模块)。这样可以从给一个文件中匹配相应的值。比如：
+
+#+BEGIN_SRC xml
+ <request>
+  <dyn_variable name="mytitlevar" re="&lt;title&gt;(.*)&lt;/title&gt;"/>
+  <http url="/testtsung.html" method="GET" version="1.0"></http>
+ </request>
+#+END_SRC
+这样可以匹配出testtsung.html文件中<title>xxx</titile>中的xxx到变量mytitlevar中。
+ 
+- JSONPath
+http://goessner.net/articles/JsonPath/
+
+用jsonpath属性替换上面的re属性。如：
+#+BEGIN_SRC xml
+  <dyn_variable name="array3_value" jsonpath="field.array[3].value"/>
+#+END_SRC
+
+- set_dynvars
+这是tsung使用动态变量最强大的方法，可以按你的需要任意设置。既可以从一个文件中读取，也可以从erlang代码结果中获取。通过
+设置set_dynvars的sourcetype属性指出变量的来源，sourcetype取值erlang(调用erlang函数获取)，file(从文件中获取)，random_number, random_string,
+eval(从erlang code中计算得到), jsonpath, server(当前服务器的参数，host，port)， value(定义一个常量)
+
+- 根据服务器相应做对应的动作
+通过match匹配服务器相应，如果匹配上就可以执行下面这些actions：
+| action   | 解释                                                                        |
+|----------+-----------------------------------------------------------------------------|
+| continue | do nothing, continue (only update match or nomatch counters)                |
+| log      | 将userid，sessionid，name记录到文件match.log中(也可以通过name来明明log文件) |
+| abort    | 终止session                                                                 |
+| restart  | 重启session，默认最大重启数为3                                              |
+| loops    | 默认5s后循环请求，默认最大循环20次                                          |
+| dump     | 将相应内容全写到match-<userid>-<sessionid>-<requestid>-<dumpid>.dump中      |
+#+BEGIN_SRC xml
+ <request>
+  <match do="loop" sleep_loop="5" max_loop="10" when="match">Retry</match>
+  <match do="abort" when="match">Error</match>
+  <http url=’/index.php’ method=GET’>
+ </request>
+#+END_SRC
+
+当然也可以在没有匹配上时执行action， 只需要把上面的when改为：when="nomatch"即可。
+
+在http中可以跳过http headers，只匹配body： skip_headers="http"。
+
+也可以使用subst="true"，匹配动态变量：<match do=’log’ when=’nomatch’ subst=’true’ >%%_myvar%%</match>
+
+
+*** Loops,If,Foreach
+可以使用这些逻辑来实现你的request。
+
+*** 排除requests
+给你需要特殊操作的request加个tag，在运行tsung的时候加上-x <eg_image>就可以不执行带有tag=<eg_image>的request:
+
+tsung -f SCENARIO.xml -x image start
+
+*** client certificate
+
+* 测试图表
+
+- 统计信息的格式
+可以在tsung标签中定义为json，但是tsung_stats.pl和tsung_plotter不能使用json文件。
+
+对于request，page，session和transaction tr_XXX，log结果分别是：
+| stats | name, 10sec_count, 10sec_mean, 10sec_stddev(标准差), max, min, mean, count  |
+| 说明  | 名字，10s内的次数，10s的均值, 10s的标准差，最大值，最小值，均值，总的次数。 |
+
+对于HTTP的返回码，size_sent和size_rcv分别是：
+| stats | name, count(during the last 10sec), totalcount(since the beginning) |
+| 说明  | 名字，10s内的次数，从开始测试到现在的总次数。                       |
+
+- 统计信息
+eg: mqtt的测试统计信息：
+#+BEGIN_SRC text
+# stats: dump at 1484807628
+stats: users 20162 40000
+stats: {load,"tsung_controller@test1"} 1 0.01171875 0.0 0.41015625 0.0 0.03553216527196651 239
+stats: {freemem,"tsung_controller@test1"} 1 3275.5546875 0.0 3294.171875 3255.12109375 3279.069740455021 239
+stats: {recvpackets,"tsung_controller@test1"} 1 1580.0 0.0 20296 1455 3108.0588235294117 238
+stats: {sentpackets,"tsung_controller@test1"} 1 168.0 0.0 15700 143 1108.2142857142858 238
+stats: {cpu,"tsung_controller@test1"} 1 0.6211180124223602 0.0 1.4955640050697085 0.42299079372978354 0.6564003492699755 239
+stats: session 0 0 0 2246433.129 230317.971 1246818.1109519647 19838
+stats: users_count 0 40000
+stats: finish_users_count 0 19838
+stats: request 0 0 0 11914.299 0.076 80.51590872976297 60162
+stats: connect 0 0 0 999.112 0.463 2.0017986882069536 76384
+stats: page 0 0 0 11925.826 0.006 0.3342237457311682 8022124
+stats: error_send_einval 0 40
+stats: error_connect_eaddrnotavail 0 1161
+stats: request_noack 0 8022124
+stats: async_unknown_data_rcv 0 8571456
+stats: size_rcv 0 415285734
+stats: error_connect_eaddrinuse 0 3
+stats: mqtt_pubacked 0 7801637
+stats: mqtt_server_published 0 7801637
+stats: mqtt_published 0 8438662
+stats: mqtt_connected 0 40000
+stats: size_sent 0 435155474
+stats: connected 0 0
+stats: error_connection_closed 0 6562
+stats: error_connect_econnrefused 0 409117
+stats: error_abort_max_conn_retries 0 19838
+#+END_SRC
+| stats               | 说明                                      |
+|---------------------+-------------------------------------------|
+| request             | 每个request的响应时间                     |
+| page                | 一系列的响应时间                          |
+| connect             | 连接建立的时间                            |
+| reconnect           | 重连的次数                                |
+| size_rcv            | 响应的数据大小bytes                       |
+| size_sent           | 请求的数据大小                            |
+| session             | 单个用户的session经历的时间               |
+| users               | 并发用户的数量(即其session启动，但未结束) |
+| connected           | 当前建立tcp/udp连接的用户数量             |
+| custom transactions |                                           |
+
+| OS监控            | 说明                     |
+|-------------------+--------------------------|
+| {load,<host>}     | 前一分钟的系统负载平均值 |
+| {cpu,<host>}      | CPU百分比                |
+| {freemem, <host>} | Free Memory              |
+
+| request_noack          | 对于no_ack的请求，响应时间是没意义的，所以加了这个表示no_ack请求的数量 |
+| async_unknown_data_rcv | 仅记录从服务器收到的数据数量                                           |
+
+- 生成测试报告
+需要安装一些依赖项perl5,gnuplot libtemplate-perl。
+#+BEGIN_SRC shell
+  $ sudo apt-get install perl5 gnuplot libtemplate-perl  
+  # 到log目录下面运行tsung_stats.pl 
+  $ cd /path-to-tsung-log/log/***/
+  $ /usr/local/lib/tsung/bin/tsung_stats.pl 
+#+END_SRC
+使用浏览器打开graph.html可以看到图形界面，打开report.html可以看到图形表。
+
+* 短句
+- 压力测试的目标，是搞死服务器，从而找到瓶颈点，如果搞不死，意义就不大。
+- 一个完整的压力测试需要关注三个方面：如何正确产生压力、如何定位瓶颈、如何预估系统的承载能力。
+- 模拟多少用户，持续多长时间, 用户连接之后有时候不能持续多久。
+
+* 问题
+
+- Host key verification failed.
+1  使用到的主机名应该和/etc/hostname中的一致。
+
+2  集群的所有机器上都使用相同的短域名
+
+3  使用ssh shortname 登录一次，在know_hosts中添加相关信息，同时验证是否可以互通。
+
+- 出现连接之后用户大量掉线的情况
+kakfa将消息打包写到kafka的时候（使用custom分区方式）会卡死，第二次重新连接之后才正常。
+
+* links
+- [[https://www.tutorialspoint.com/software_testing_dictionary/performance_testing.htm][Performance Testing]] (这里有很多讲测试的文章.)
+- https://msdn.microsoft.com/en-us/library/bb924376.aspx (这里有很规范的测试过程说明)
+- http://blog.csdn.net/simongyley/article/details/8559812
+
+#+CAPTION: 性能测试步骤 
+#+LABEL: fig:SED-HR4049
+[[./images/PerformanceTestSteps.png]]
+

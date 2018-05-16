@@ -1,0 +1,22 @@
+#+TITLE:       docker的系统内核调优
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-05-08 Mon
+#+URI:         /blog/%y/%m/%d/docker的系统内核调优
+#+KEYWORDS:    docker,kernel system parameters,tuning
+#+TAGS:        ops,points
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: docker中的系统内核调优
+
+遇到了一个问题，服务器原本没有使用docker的时候，系统内核参数调节没什么问题，连接数达到3,4十万，使用docker，并通过docker进行系统参数调节之后，
+发现连接数不能超过6.5w，不使用docker发现依然连接超不过6.5w，难道docker的调节会影响到本机吗？
+
+最后在https://docs.docker.com/engine/reference/commandline/run/#specify-isolation-technology-for-container---isolation
+找到了这句话：
+
+> Note: Not all sysctls are namespaced. Docker does not support changing sysctls inside of a container that also modify the host system. As the kernel evolves we expect to see more sysctls become namespaced.
+
+
+https://stackoverflow.com/questions/24318543/how-to-set-ulimit-file-descriptor-on-docker-container-the-image-tag-is-phusion
+这里说了一种方法，修改/etc/init/docker.conf文件中

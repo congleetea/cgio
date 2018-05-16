@@ -1,0 +1,24 @@
+#+TITLE:       erlang 数据库驱动 eredis_pool 解析
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-07-24 Mon
+#+URI:         /blog/%y/%m/%d/eredis_pool解析
+#+KEYWORDS:    erlang,poolboy,redis
+#+TAGS:        points,erlang
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: <TODO: insert your description here>
+
+
+- poolboy会为每个池子启动一个pool进程，该进程再启动一个pool_sup进程，再由pool_sup启动所有的worker。
+- pool进程会link所有的worker。 
+- 启动pool进程的初始化时就会启动Size个worker。一旦一个worker启动失败，pool进程就会挂掉，所有worker也随即挂掉。
+- 当worker列表中Pid不够用的时候，如果设置了overflow，就会新创建worker使用，同样启动失败也会导致所有worker挂掉。 
+- overflow产生的worker不会放到worker列表中去, 使用完就会被杀死掉。 
+
+
+#+BEGIN_SRC plantuml :file ./images/eredis_pool.png  :cmdline -charset UTF-8
+eredis_pool_sup -> poolboy: 定义pool的启动方式
+poolboy -> pool: 启动pool进程,新建一个队列和monitor表 
+pool -> pool_sup: 为每个pool启动一个监控进程,并定义worker的启动方式  
+#+END_SRC                                                                                                                                                                             

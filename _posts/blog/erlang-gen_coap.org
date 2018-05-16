@@ -1,0 +1,53 @@
+#+TITLE:       erlang 的 coap 库 gen_coap
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-12-09 Sat
+#+URI:         /blog/%y/%m/%d/gen_coap
+#+KEYWORDS:    erlang,gen_coap
+#+TAGS:        erlang,points
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: gen_coap代码笔记
+
+
+* CON req
+
+#+BEGIN_SRC plantuml :file ./images/con-message.png  :cmdline -charset UTF-8
+udp_sock -> channel: 将消息发送到channel 
+channel -> transport: 每条消息一个tr_state记录，初始状态为idle.
+transport -> responder: 设置超时定时器,由channel发送{timeout,TrId,transport}消息:\n(CON:EXCHANGE_LIFETIME)，\n处理该消息:\n1.解析消息(req);\n2.如果receiver空,查找/生成responder(based Url).\n如果得到responder，将任务发到responder.
+transport -> channel: 若无responder，回复not_found.
+responder -> responder: 根据opt处理消息块,返回:\n{ok,Payload,State};\n{error,Err};\n{continue,State}
+responder -> channel: 1.{error,Err},返回错误码.  
+responder -> channel: 2.{continue,State}:\n 2.1.设置block1选项，回复返回信息.\n 2.1.EXCHANGE_LIFETIME,到时发送cache_expired.  
+responder -> responder: 3.{ok,Payload,State}:\n执行Module:coap_get/1获取资源.\n3.1.处理if-match和if-none-match请求，\n    符合则处理请求，否则返回precondition_failed;\n3.2.根据method处理请求.
+responder -> observe: 1.如是get方法:
+observe -> responder: 1.1.处理observe选项:0表示订阅，1表示取消，其他错误,\na)订阅:首次订阅时处理,执行Module:coap_observe/5,\na1.符合observe，将responder加入Url的进程组;\na2.不符合，执行get方法。\nb取消订阅:执行Module:unobserve/1,从进程组移除. 
+responder -> channel: 发送get方法的结果. 
+responder -> channel: 2.如是pose方法，调用Module:coap_post,发送结果.
+responder -> channel: 3.如是put方法，调用Module:coap_put,发送结果.
+responder -> channel: 4.如是delete方法，调用Module:coap_delete,发送结果.
+transport -> transport: next_state got_non.
+#+END_SRC
+
+
+* NON req
+
+#+BEGIN_SRC plantuml :file ./images/non-message.png  :cmdline -charset UTF-8
+udp_sock -> channel: 将消息发送到channel 
+channel -> transport: 每条消息一个tr_state记录，初始状态为idle.
+transport -> responder: 设置超时定时器,由channel发送{timeout,TrId,transport}消息:\n(NON:NON_LIFETIME)，\n处理该消息:\n1.解析消息(req);\n2.如果receiver空,查找/生成responder(based Url).\n如果得到responder，将任务发到responder.
+transport -> channel: 若无responder，回复not_found.
+responder -> responder: 根据opt处理消息块,返回:\n{ok,Payload,State};\n{error,Err};\n{continue,State}
+responder -> channel: 1.{error,Err},返回错误码.  
+responder -> channel: 2.{continue,State}:\n 2.1.设置block1选项，回复返回信息.\n 2.1.EXCHANGE_LIFETIME,到时发送cache_expired.  
+responder -> responder: 3.{ok,Payload,State}:\n执行Module:coap_get/1获取资源.\n3.1.处理if-match和if-none-match请求，\n    符合则处理请求，否则返回precondition_failed;\n3.2.根据method处理请求.
+responder -> observe: 1.如是get方法:
+observe -> responder: 1.1.处理observe选项:0表示订阅，1表示取消，其他错误,\na)订阅:首次订阅时处理,执行Module:coap_observe/5,\na1.符合observe，将responder加入Url的进程组;\na2.不符合，执行get方法。\nb取消订阅:执行Module:unobserve/1,从进程组移除. 
+responder -> channel: 发送get方法的结果. 
+responder -> channel: 2.如是pose方法，调用Module:coap_post,发送结果.
+responder -> channel: 3.如是put方法，调用Module:coap_put,发送结果.
+responder -> channel: 4.如是delete方法，调用Module:coap_delete,发送结果.
+transport -> transport: next_state got_non.
+#+END_SRC
+

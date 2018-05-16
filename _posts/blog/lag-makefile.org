@@ -1,0 +1,17 @@
+#+TITLE:       MakeFile使用
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2017-01-03 Tue
+#+URI:         /blog/%y/%m/%d/makefile使用
+#+KEYWORDS:    makefile
+#+TAGS:        language, points
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: 使用makefile中遇到的小点
+
+| Dots               | Reference                                             |
+| :--                | :--                                                   |
+| .PHONY的使用       | http://blog.sina.com.cn/s/blog_5f1761850100p37b.html  |
+| makefile双冒号规则 | http://blog.csdn.net/dengxu11/article/details/6932523 |
+|                    |                                                       |
+ 

@@ -1,0 +1,24 @@
+#+TITLE:       基础网络知识
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-11-24 Fri
+#+URI:         /blog/%y/%m/%d/基础网络知识
+#+KEYWORDS:    points,internet
+#+TAGS:        bridge,network 
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: 基础网络知识，主要是名词解释
+
+
+* 桥接，交换机，网桥
+
+http://blog.csdn.net/fivedoumi/article/details/51746798
+
+Linux-网桥原理分析（一） http://biancheng.dnbcw.net/linux/244269.html
+
+网桥(桥接器network bridge): https://zh.wikipedia.org/wiki/%E6%A9%8B%E6%8E%A5%E5%99%A8 
+: 又称网桥，一种网络设备，负责网络桥接（network bridging）之用。桥接器将网络的多个网段在数据链路层（OSI模型第2层）连接起来（即桥接）。
+
+概括来说，网桥实现最重要的两点：
+1． MAC学习：学习MAC地址，起初，网桥是没有任何地址与端口的对应关系的，它发送数据，还是得想HUB一样，但是每发送一个数据，它都会关心数据包的来源MAC是从自己的哪个端口来的，由于学习，建立地址-端口的对照表（CAM表）。
+2． 报文转发：每发送一个数据包，网桥都会提取其目的MAC地址，从自己的地址-端口对照表(CAM表)中查找由哪个端口把数据包发送出去。

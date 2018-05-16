@@ -1,0 +1,20 @@
+#+TITLE:       erlang 进程和资源的 link 和 monitor
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@gmail.com
+#+DATE:        2017-11-17 Fri
+#+URI:         /blog/%y/%m/%d/erlang-link和monitor
+#+KEYWORDS:    erlang,link,monitor,supervisor
+#+TAGS:        erlang,points
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: erlang的进程间联系-link和monitor
+
+
+* 进程监控的管理 
+
+  两个进程通过erlang:monitor(process, PidB) 建立了monitor 关系，结果返回一个引用Ref，我们应该保存这个Ref，
+  当进程B出现问题的时候，可以解除 monitor 关系。这个Ref保存在进程内部那里都可以，只要能找到就行。但是，有
+  时候我们会使用一个进程去监控一堆性质差不多的进程，比如pool中pool进程要监控pool中的worker，这时候为了查询
+  快速，我们可以将monitor放在dict中，比如 emqttd 的 emqttd_sm 进程就是用来管理session的，他会和他管理的所有
+  session进程建立monitor关系，这里就是把monitor保存在dict中，然后将dict保存在gen_server的state中。
+

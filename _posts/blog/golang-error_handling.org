@@ -1,0 +1,155 @@
+#+TITLE:       Golang-错误处理
+#+AUTHOR:      congleetea
+#+EMAIL:       congleetea@m6
+#+DATE:        2016-12-22 Thu
+#+URI:         /blog/%y/%m/%d/golang-错误处理
+#+KEYWORDS:    golang,error,defer,panic,recover
+#+TAGS:        golang, points
+#+LANGUAGE:    en
+#+OPTIONS:     H:3 num:nil toc:nil \n:nil ::t |:t ^:nil -:nil f:t *:t <:t
+#+DESCRIPTION: Go-错误处理
+
+* defer
+A defer statement pushes a function call onto a list. The list of saved calls is executed after the surrounding function returns. Defer is commonly used to simplify functions that perform various clean-up actions.
+
+defer声明将函数push到一个队列中，当 *最近的函数返回时* 执行该函数。
+
+** 三种行为
+- defer函数的参数是声明defer的时候就确定的。
+
+#+BEGIN_SRC go
+    func a() {
+        i := 0
+        defer fmt.Println(i)
+        i++
+        return
+    }
+#+END_SRC
+
+执行结果是0.
+
+- defer函数一次放入一个队列，执行的时候按后入先出规则执行。
+
+#+BEGIN_SRC go
+   func b() {
+    for i := 0; i < 4; i++ {
+        defer fmt.Print(i)
+    }
+   }
+#+END_SRC
+
+执行结果是3210
+
+- defer的函数可能读取和分配返回函数的返回值：
+
+#+BEGIN_SRC go
+func c() (i int) {
+    defer func() { i++ }()
+    return 1
+}
+#+END_SRC
+
+函数返回2.  
+
+*注意* 在init中使用defer可能是的某些全局量不能使用，因为退出init的时候就会执行defer进行销毁。
+
+完整测试代码：
+
+#+BEGIN_SRC go
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Print("a:\n")
+	a()
+	fmt.Print("b:\n")
+	b()
+	fmt.Print("c:\n")
+	c()
+}
+
+func a() {
+	i := 0
+	defer fmt.Println(i)
+	i++
+	return
+}
+
+func b() {
+	for i := 0; i < 4; i++ {
+		defer fmt.Println(i)
+	}
+}
+
+func c() (i int) {
+	defer func() {
+		j := i + 1
+		fmt.Println(j)
+	}()
+	return 1
+}
+#+END_SRC
+
+
+* panic
+
+panic是一个内嵌函数，用来停止正常流程， 如果函数 F 使用了panic，那么F停止之后，已经defered的函数仍然正常工作，
+
+
+* recover
+
+recover也是一个内嵌函数，用来恢复panic进程的控制。recover只有在defer函数内部才有用。
+其他时候调用recover只会返回nil，没有任何作用。如果一个进程被panic，recover调用会捕捉到给panic的值，
+并从panic处重新正常执行。
+
+#+BEGIN_SRC go
+package main
+
+import "fmt"
+
+func main() {
+    f()
+    fmt.Println("Returned normally from f.")
+}
+
+func f() {
+    defer func() {
+        if r := recover(); r != nil {
+            fmt.Println("Recovered in f", r)
+        }
+    }()
+    fmt.Println("Calling g.")
+    g(0)
+    fmt.Println("Returned normally from g.")
+}
+
+func g(i int) {
+    if i > 3 {
+        fmt.Println("Panicking!")
+        panic(fmt.Sprintf("%v", i))
+    }
+    defer fmt.Println("Defer in g", i)
+    fmt.Println("Printing in g", i)
+    g(i + 1)
+}
+#+END_SRC
+
+输出：
+
+#+BEGIN_SRC text
+Calling g.
+Printing in g 0
+Printing in g 1
+Printing in g 2
+Printing in g 3
+Panicking!
+Defer in g 3
+Defer in g 2
+Defer in g 1
+Defer in g 0
+Recovered in f 4
+Returned normally from f.
+#+END_SRC
+
+如果我们删除defer函数，就函数就会因为panic而退出。因为没有执行defer中的recover函数。
